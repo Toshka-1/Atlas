@@ -271,6 +271,22 @@
 .trophy b { display: block; font-size: 15px; overflow-wrap: anywhere }
 .trophy em { display: block; font-style: normal; color: var(--muted); font-size: 13px }
 .trophy .when { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap }
+.budnum { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px }
+.budnum strong { font: 800 40px/1 var(--display) }
+.budnum span { font-size: 14px; color: var(--muted) }
+.budnum.warn strong { color: var(--warn) } .budnum.bad strong { color: var(--bad) }
+.budsub { margin: 6px 0 0; font-size: 13.5px; line-height: 1.45; color: var(--muted) }
+.wkstrip { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin: 12px 0 4px }
+.wkd { display: grid; justify-items: center; gap: 2px; padding: 7px 2px; border-radius: 10px; background: var(--sunk); border: 1px solid transparent; font-size: 11.5px; color: var(--muted); min-width: 0 }
+.wkd b { font-size: 12.5px; color: var(--ink); font-variant-numeric: tabular-nums; white-space: nowrap }
+.wkd.cur { border-color: var(--accent) }
+.wkd.good b { color: var(--good) } .wkd.warn b { color: var(--warn) } .wkd.bad b { color: var(--bad) }
+.wkd.proj b { color: var(--muted); font-weight: 600 }
+.wkd.plan { background: var(--accent-soft) } .wkd.plan b { color: var(--accent) }
+.planrow { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 10px }
+.planrow button { min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: 600 13.5px var(--body); cursor: pointer }
+.planrow button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff }
+.planbtns { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px }
 .trophy .nomedal { font-size: 20px; opacity: .55 }
 .trophy .lvl { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--sunk); color: var(--muted) }
 .trophy .lvl.l3, .trophy .lvl.l4 { background: #F6E7B0; color: #6B4E00 }
@@ -958,6 +974,19 @@ sommeil: Somme</pre></li>
     <p class="hint" id="defhint"></p>
   </section>
 
+  <section class="card" id="budgetcard">
+    <div class="ch"><h2>Budget de la semaine</h2><span class="aside" id="budaside"></span></div>
+    <div id="budget"></div>
+    <div class="wkstrip" id="budstrip" role="list" aria-label="Kcal jour par jour"></div>
+    <p class="hint" id="budhint"></p>
+    <details class="howto" id="budplan"><summary>Prévoir un gros repas</summary>
+      <p class="hint">Resto, repas de fête : note ce que tu comptes manger ce jour-là, les autres jours s'ajustent tout seuls.</p>
+      <div class="planrow" id="plandays" role="group" aria-label="Jour du gros repas"></div>
+      <label class="f"><span class="lab">Kcal prévues ce jour-là</span><span class="inp"><input type="text" inputmode="numeric" id="plank" placeholder="3500" autocomplete="off"><i>kcal</i></span></label>
+      <div class="planbtns"><button class="btn" id="plansave" type="button">Prévoir</button><button class="linkish2" id="planclear" type="button" hidden>Retirer ce gros repas</button></div>
+    </details>
+  </section>
+
   <section class="card">
     <div class="ch"><h2>Récupération</h2></div>
     <div class="grid3 gone">
@@ -1473,6 +1502,7 @@ sommeil: Somme</pre></li>
 
   // ---------- déficit ----------
   function paintDeficit() {
+    try { paintBudget(); } catch (e) { console.error(e); }
     const ra = restAvg(), d = defOf(state, ra), box = $("deficit");
     box.innerHTML = "";
     if (!d) {
@@ -1494,6 +1524,94 @@ sommeil: Somme</pre></li>
     box.append(g, sc);
     $("defhint").textContent = "Dépense " + fmtN(d.burn) + (d.est ? " (actives + repos moyen de " + fmtN(ra) + ")" : "") + " moins " + fmtN(state.kcal) + " mangées. La montre surestime souvent la muscu : regarde la tendance sur la semaine plutôt que le chiffre exact.";
   }
+
+  // ---------- budget de la semaine (lundi → dimanche) ----------
+  // Antoine raisonne à la semaine : ce qui reste à manger jusqu'à dimanche, réparti sur les jours pas encore notés.
+  // Un gros repas prévu (champ planK du jour) est retiré du reste avant de répartir. Jour passé non noté : compté à la cible.
+  const WD = ["L", "M", "M", "J", "V", "S", "D"], WDL = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"];
+  let planSel = null;
+  function weekData() {
+    const mon = mondayOf(cur), t0 = todayKey(), ra = restAvg();
+    let budget = 0, eaten = 0, defT = 0, defDone = 0, nDef = 0, nNoted = 0;
+    const rows = [0, 1, 2, 3, 4, 5, 6].map((i) => {
+      const k = shift(mon, i), tg = tgFor(phaseAt(k)), d = k === cur ? state : days[k] || {};
+      const kc = isNum(d.kcal) && d.kcal > 0 ? d.kcal : null, plan = isNum(d.planK) && d.planK > 0 ? d.planK : null, df = defOf(d, ra);
+      budget += tg.kcal; defT += (tg.defLo + tg.defHi) / 2;
+      if (kc != null) { eaten += kc; nNoted++; }
+      if (df) { defDone += df.v; nDef++; }
+      return { k, i, tg, kc, plan, df, open: kc == null && k >= t0, missed: kc == null && k < t0 };
+    });
+    rows.forEach((r) => { if (r.missed) eaten += r.tg.kcal; });
+    const open = rows.filter((r) => r.open), free = open.filter((r) => r.plan == null), planned = open.reduce((a, r) => a + (r.plan || 0), 0);
+    const left = budget - eaten, per = free.length ? (left - planned) / free.length : null;
+    return { rows, budget, eaten, left, per, open, free, planned, defT, defDone, nDef, nNoted, mon };
+  }
+  function paintBudget() {
+    const w = weekData(), box = $("budget"), tgNow = tgFor(phaseAt(cur));
+    $("budaside").textContent = fmtDM(w.mon) + " → " + fmtDM(shift(w.mon, 6));
+    box.innerHTML = "";
+    const top = el("div", "budnum"), sub = el("p", "budsub");
+    let hint = "";
+    if (w.per != null) {
+      const p = Math.round(w.per / 10) * 10, gap = tgNow.kcal - p, cls = gap > 600 ? "bad" : gap > 250 ? "warn" : "";
+      top.className = "budnum " + cls;
+      top.append(el("strong", null, fmtN(Math.max(0, p))), el("span", null, "kcal par jour " + (w.free.length === 1 ? "pour finir la semaine" : "sur les " + w.free.length + " jours qui restent")));
+      if (gap > 250) { const steps = Math.round((gap - 150) / 0.045 / 500) * 500; hint = "C'est serré : plutôt que de manger moins, ajoute environ " + fmtN(steps) + " pas par jour, ou étale l'écart sur la semaine suivante."; }
+      else if (gap < -250) hint = "Tu as de la marge cette semaine : pas besoin de la manger, garde-la pour un repas plus copieux.";
+    } else if (w.open.length) {
+      top.append(el("strong", null, fmtN(Math.round(w.left))), el("span", null, "kcal restantes, toutes prévues en gros repas"));
+    } else {
+      const avg = Math.round(w.eaten / 7);
+      top.append(el("strong", null, fmtN(avg)), el("span", null, "kcal de moyenne cette semaine (cible " + fmtN(Math.round(w.budget / 7)) + ")"));
+    }
+    const pace = w.nDef ? Math.round(w.defDone - (w.defT / 7) * w.nDef) : null;
+    sub.textContent = "Mangé " + fmtN(Math.round(w.eaten - w.rows.filter((r) => r.missed).reduce((a, r) => a + r.tg.kcal, 0))) + " sur " + fmtN(w.budget) + " kcal" +
+      (w.nDef ? " · déficit montre " + fmtN(Math.round(w.defDone)) + " sur " + fmtN(Math.round(w.defT)) + " visés" + (Math.abs(pace) >= 300 ? " (" + (pace > 0 ? "en avance de " : "en retard de ") + fmtN(Math.abs(pace)) + ")" : ", dans le rythme") : "");
+    box.append(top, sub);
+    const missed = w.rows.filter((r) => r.missed).length;
+    if (missed) hint = (hint ? hint + " " : "") + plural(missed, "Un jour passé n'est pas noté : compté à la cible.", missed + " jours passés ne sont pas notés : comptés à la cible.");
+    $("budhint").textContent = hint; $("budhint").hidden = !hint;
+    // bande lundi → dimanche
+    const strip = $("budstrip"); strip.innerHTML = "";
+    w.rows.forEach((r) => {
+      let cls = "wkd", val = "–";
+      if (r.kc != null) { const dv = r.kc - r.tg.kcal; cls += Math.abs(dv) <= 150 ? " good" : dv > 400 ? " bad" : " warn"; val = fmtN(r.kc); }
+      else if (r.open && r.plan != null) { cls += " plan"; val = fmtN(r.plan); }
+      else if (r.open && w.per != null) { cls += " proj"; val = "~" + fmtN(Math.round(w.per / 10) * 10); }
+      if (r.k === cur) cls += " cur";
+      const c = el("div", cls); c.setAttribute("role", "listitem");
+      c.append(el("span", null, WD[r.i]), el("b", null, val));
+      c.setAttribute("aria-label", WDL[r.i] + " : " + (r.kc != null ? fmtN(r.kc) + " kcal mangées" : r.plan != null && r.open ? "gros repas prévu, " + fmtN(r.plan) + " kcal" : r.open && w.per != null ? "environ " + fmtN(Math.round(w.per)) + " kcal à viser" : "pas noté"));
+      strip.appendChild(c);
+    });
+    paintPlan(w);
+  }
+  function paintPlan(w) {
+    const box = $("plandays"); box.innerHTML = "";
+    if (!w.open.length) { box.appendChild(el("p", "hint", "Plus de jour à venir cette semaine.")); $("plansave").hidden = true; $("planclear").hidden = true; return; }
+    if (!planSel || !w.open.some((r) => r.k === planSel)) { const p = w.open.find((r) => r.plan != null); planSel = p ? p.k : w.open[w.open.length - 1].k; }
+    w.open.forEach((r) => {
+      const b = el("button", null, WDL[r.i].slice(0, 3) + ". " + parseKey(r.k).getDate() + (r.plan != null ? " · " + fmtN(r.plan) : "")); b.type = "button";
+      b.setAttribute("aria-pressed", String(r.k === planSel));
+      b.onclick = () => { planSel = r.k; const sel = w.open.find((x) => x.k === r.k); $("plank").value = sel && sel.plan != null ? sel.plan : ""; paintPlan(weekData()); };
+      box.appendChild(b);
+    });
+    const sel = w.open.find((r) => r.k === planSel);
+    $("plansave").hidden = false; $("plansave").textContent = sel && sel.plan != null ? "Modifier" : "Prévoir";
+    $("planclear").hidden = !(sel && sel.plan != null);
+  }
+  function setPlan(k, v) {
+    if (k === cur) { if (v == null) delete state.planK; else state.planK = v; queueSave(); }
+    else { const doc = clone(days[k] || { date: k }); if (v == null) delete doc.planK; else doc.planK = v; stage(k, doc, ["planK"]); pump(); }
+    paintBudget();
+  }
+  $("plansave").onclick = () => {
+    const v = num($("plank").value.split(" ").join("").split("\u00a0").join(""));
+    if (!planSel) return;
+    if (!isNum(v) || v < 1500 || v > 9000) { toast("Entre les kcal prévues ce jour-là (entre 1 500 et 9 000)."); return; }
+    setPlan(planSel, Math.round(v)); $("plank").value = ""; toast("Gros repas prévu " + WDL[(parseKey(planSel).getDay() + 6) % 7] + " : les autres jours sont ajustés.");
+  };
+  $("planclear").onclick = () => { if (planSel) { setPlan(planSel, null); toast("Gros repas retiré."); } };
 
   // ---------- Santé (raccourci iPhone « Atlas Santé ») ----------
   // Une page web ne peut pas lire Santé : le raccourci lit les données, les copie et ouvre l'appli ; « Importer » les range au bon jour.
@@ -2345,7 +2463,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v20";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v21";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
