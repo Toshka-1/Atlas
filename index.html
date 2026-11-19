@@ -271,6 +271,12 @@
 .trophy b { display: block; font-size: 15px; overflow-wrap: anywhere }
 .trophy em { display: block; font-style: normal; color: var(--muted); font-size: 13px }
 .trophy .when { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap }
+.trophy .nomedal { font-size: 20px; opacity: .55 }
+.trophy .lvl { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--sunk); color: var(--muted) }
+.trophy .lvl.l3, .trophy .lvl.l4 { background: #F6E7B0; color: #6B4E00 }
+.trophy .lvl.l2 { background: #E3E7EE; color: #3D4757 }
+.trophy .lvl.l1 { background: #F1DCC8; color: #6E3B12 }
+.trophylegend { margin-top: 10px }
 .trophy .new { display: inline-block; margin-top: 3px; padding: 1px 7px; border-radius: 999px; background: var(--good-soft); color: var(--good); font-size: 11px; font-weight: 700 }
 .trophyhead { display: flex; gap: 10px; align-items: baseline; margin: 0 0 10px }
 .trophyhead strong { font-family: var(--display); font-size: 34px; line-height: 1 }
@@ -1034,12 +1040,13 @@ sommeil: Somme</pre></li>
   </section>
 
   <section class="card" id="trophycard">
-    <div class="ch"><h2>Salle des trophées</h2><span class="aside">tes records</span></div>
-    <p class="empty" id="trophyempty">Tes trophées apparaissent dès que tu bats une de tes meilleures séries.</p>
+    <div class="ch"><h2>Salle des trophées</h2><span class="aside">gros exercices</span></div>
+    <p class="empty" id="trophyempty">Tes records apparaissent dès que tu notes une séance avec un gros exercice (développé couché, militaire, tractions, hack squat, presse…).</p>
     <div id="trophybody" hidden>
       <div class="trophyhead"><strong id="trophyn"></strong><span id="trophysub"></span></div>
       <div class="trophies" id="trophies"></div>
       <button class="linkish2" id="trophymore" type="button" hidden></button>
+      <p class="hint trophylegend" id="trophylegend" hidden>Médaille = ton niveau face aux pratiquants de ton poids : 🥇 avancé ou élite, 🥈 intermédiaire, 🥉 novice. 🏋️ = pas de repère fiable (incliné, dips, machine différente) : seulement ton record. 1RM ≈ charge max estimée.</p>
     </div>
   </section>
 
@@ -2338,7 +2345,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v19";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v20";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
@@ -2774,33 +2781,72 @@ sommeil: Somme</pre></li>
     $("progalert").textContent = drops.length ? "En baisse sur 2 séances de suite : " + drops.join(", ") + ". D'après ton plan, c'est le signal pour remonter de 200 kcal (et vérifier sommeil et fatigue)." : "";
   }
   // ---------- salle des trophées ----------
-  // Un trophée = une meilleure série battue (charge et reps combinées, même exercice, même machine, même unité).
+  // Seulement les gros exercices, ceux où connaître son record sert à se comparer (demande du 19 nov).
+  // Record = meilleure série de travail en 1RM estimé (Epley, 15 reps au plus), par exercice et par machine.
+  // Médaille = niveau de force par rapport aux pratiquants de ton poids (repères StrengthLevel) :
+  // or = avancé ou élite, argent = intermédiaire, bronze = novice. Sans repère fiable : pas de médaille, juste le record.
+  const BIG = [
+    { id: "bench", nm: "Développé couché", re: /^developpe couche(?!.*(halt|smith|incline))/, bar: true, std: "bench" },
+    { id: "incl", nm: "Développé incliné", re: /developpe incline/ },
+    { id: "ohp", nm: "Développé militaire", re: /militaire|shoulder press/, std: "ohp" },
+    { id: "dips", nm: "Dips lestés", re: /\bdips?\b/, added: true },
+    { id: "pull", nm: "Tractions lestées", re: /traction|pull.?up/, added: true, std: "pull" },
+    { id: "lat", nm: "Tirage vertical", re: /tirage vertical|lat pulldown/ },
+    { id: "row", nm: "Rowing barre", re: /rowing/ },
+    { id: "squat", nm: "Squat", re: /^squat/ },
+    { id: "hack", nm: "Hack squat", re: /hack/, std: "hack" },
+    { id: "press", nm: "Presse à cuisses", re: /^(presse|leg press)/, std: "press" },
+    { id: "dl", nm: "Soulevé de terre", re: /souleve de terre(?!.*roumain)|deadlift/ },
+    { id: "rdl", nm: "Soulevé de terre roumain", re: /roumain|\brdl\b/ },
+    { id: "hip", nm: "Hip thrust", re: /hip thrust/ }
+  ];
+  const MEDAL = ["", "🥉", "🥈", "🥇", "🥇"];
   let trophyAll = false;
   function renderTrophies() {
-    const box = $("trophies"), rows = [], t = todayKey(), recent = shift(t, -7); let nAll = 0, nCut = 0;
+    const box = $("trophies"), t = todayKey(), recent = shift(t, -13), recs = {}; let nCut = 0;
     box.innerHTML = "";
-    exHistory().forEach((h) => {
-      let best = null, beats = 0;
-      h.pts.forEach((p) => { if (!best) { best = p; return; } if (p.e > best.e + 0.05) { beats++; nAll++; if (p.k >= SECHE_START) nCut++; best = p; } });
-      if (beats) rows.push({ h, best, beats });
+    sortedKeys().forEach((k) => (Array.isArray(days[k].workout) ? days[k].workout : []).forEach((ex) => {
+      const nn = norm(ex.name); if (!nn || isPl(ex.unit) || /unilat/.test(nn + " " + norm(ex.machine))) return; // plaques et unilatéral : pas comparables
+      const L = BIG.find((x) => x.re.test(nn)); if (!L) return;
+      const BW = L.added ? bodyKg().kg : 0;
+      (ex.sets || []).filter(work).forEach((st) => {
+        const w = isNum(st.w) && st.w > 0 ? toKg(st.w, ex.unit) : L.added ? 0 : null; if (w == null) return;
+        const kg = w + (L.bar ? (ex.unit === "lb" ? 45 * LB : 20) : 0), f = 1 + Math.min(15, st.r) / 30; // développé couché noté sans la barre
+        const e = L.added ? (BW + kg) * f - BW : kg * f, key = L.id + "|" + norm(ex.machine);
+        const r = recs[key] || (recs[key] = { L, machine: ex.machine || "", best: null, beats: 0, n: 0 });
+        if (!r.best || e > r.best.e + 0.05) { if (r.best) { r.beats++; if (k >= SECHE_START) nCut++; } r.best = { e, k, st, u: ex.unit || "kg" }; }
+      });
+    }));
+    const rows = Object.values(recs);
+    let lv = null; try { lv = { row: stdRow, pct: pctOf, idx: levelIdx, S: STD, bw: bodyKg().kg }; } catch (e) { lv = null; }
+    rows.forEach((r) => {
+      r.lvl = -1; r.pct = null;
+      if (lv && r.L.std && lv.S[r.L.std] && !r.machine) { r.pct = lv.pct(r.best.e, lv.row(lv.S[r.L.std], lv.bw)); r.lvl = lv.idx(r.pct); }
     });
     $("trophyempty").hidden = !!rows.length; $("trophybody").hidden = !rows.length;
     if (!rows.length) return;
-    rows.sort((a, b) => b.best.k.localeCompare(a.best.k) || b.beats - a.beats || a.h.name.localeCompare(b.h.name, "fr"));
-    $("trophyn").textContent = String(nCut || nAll);
-    $("trophysub").textContent = nCut ? plural(nCut, "record battu", "records battus") + " depuis le début de la sèche (" + fmtDM(SECHE_START) + ")" : plural(nAll, "record battu", "records battus") + " en tout";
+    rows.sort((a, b) => b.lvl - a.lvl || (b.pct || 0) - (a.pct || 0) || BIG.indexOf(a.L) - BIG.indexOf(b.L));
+    const nMed = rows.filter((r) => r.lvl >= 1).length;
+    $("trophyn").textContent = String(rows.length);
+    $("trophysub").textContent = plural(rows.length, "record sur les gros exercices", "records sur les gros exercices") + (nCut ? " · " + nCut + " " + plural(nCut, "battu", "battus") + " depuis le " + fmtDM(SECHE_START) : "");
     const shown = trophyAll ? rows : rows.slice(0, 8);
     shown.forEach((r) => {
-      const row = el("div", "trophy"), mid = el("div");
-      row.appendChild(el("span", "medal", r.beats >= 3 ? "🥇" : r.beats === 2 ? "🥈" : "🥉"));
-      mid.append(el("b", null, r.h.name), el("em", null, setLabel(r.best.st) + (isNum(r.best.st.w) ? " " + unitName(r.best.u) : "") + " · battu " + r.beats + " fois"));
-      const when = el("div", "when", fmtDM(r.best.k));
-      if (r.best.k >= recent) { when.appendChild(document.createElement("br")); when.appendChild(el("span", "new", "Nouveau")); }
-      row.append(mid, when); row.setAttribute("aria-label", r.h.name + " : record " + setLabel(r.best.st) + " le " + fmtLong(r.best.k) + ", battu " + r.beats + " fois");
+      const row = el("div", "trophy"), mid = el("div"), b = r.best, name = r.L.nm + (r.machine ? " · " + r.machine : "");
+      const med = el("span", "medal" + (r.lvl >= 1 ? "" : " nomedal"), r.lvl >= 1 ? MEDAL[r.lvl] : "🏋️");
+      row.appendChild(med);
+      const lift = setLabel(b.st) + (isNum(b.st.w) ? " " + unitName(b.u) + (r.L.bar && b.u === "lb" ? " sans barre" : "") : "");
+      const rm = (r.L.added ? "lest 1RM ≈ " : "1RM ≈ ") + fmtN(Math.round(b.e)) + " kg";
+      mid.append(el("b", null, name), el("em", null, lift + " · " + rm));
+      if (r.lvl >= 0) mid.appendChild(el("span", "lvl l" + r.lvl, LEVELS[r.lvl] + " · " + topTxt(r.pct)));
+      const when = el("div", "when", fmtDM(b.k));
+      if (b.k >= recent && r.beats) { when.appendChild(document.createElement("br")); when.appendChild(el("span", "new", "Nouveau")); }
+      row.append(mid, when);
+      row.setAttribute("aria-label", name + " : record " + lift + " le " + fmtLong(b.k) + ", 1RM estimé " + Math.round(b.e) + " kg" + (r.lvl >= 0 ? ", niveau " + LEVELS[r.lvl] : ""));
       box.appendChild(row);
     });
     const more = $("trophymore"); more.hidden = rows.length <= 8;
-    more.textContent = trophyAll ? "Voir moins" : "Voir les " + rows.length + " trophées";
+    more.textContent = trophyAll ? "Voir moins" : "Voir les " + rows.length + " records";
+    $("trophylegend").hidden = !nMed;
   }
   $("trophymore").onclick = () => { trophyAll = !trophyAll; renderTrophies(); };
 
