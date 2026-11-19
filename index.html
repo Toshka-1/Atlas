@@ -1,4 +1,5 @@
-<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Atlas"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="theme-color" content="#0F1E33"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-180.png"><meta name="robots" content="noindex"><script>// Atlas hors ligne : remplace la base de claude.ai par une base gardée sur l'iPhone (localStorage).
+<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Atlas"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="theme-color" content="#0F1E33"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="icon-180.png"><meta name="robots" content="noindex"><script>// Atlas hors ligne : remplace la base de claude.ai par une base gardée sur l'iPhone (localStorage),
+// et la recopie toute seule dans le dépôt GitHub privé Toshka-1/Atlas-data dès qu'il y a du réseau.
 (function () {
   window.__ATLAS_LOCAL = true;
   var KEY = "atlas-local-db", C = ["days", "analyses", "bilans", "settings", "evals", "diag"], db = null;
@@ -19,7 +20,7 @@
       var prev = db[c][id], b = copy(body);
       db[c][id] = merge ? deep(prev, b) : b;
       if (!save()) { if (prev === undefined) delete db[c][id]; else db[c][id] = prev; rej({ code: "quota_exceeded", message: "storage full" }); return; }
-      res(); deliver(c);
+      res(); deliver(c); touched(c);
     });
   };
   var coll = function (c) {
@@ -37,8 +38,176 @@
     };
     return q;
   };
-  var api = { collection: coll };
-  window.claude = { use: function (n) { return Promise.resolve(n === "db" ? api : null); } };
+
+  // ---------- sauvegarde en ligne (GitHub) ----------
+  // Fichiers du dépôt : days/AAAA-MM.json (un mois par fichier), settings.json, bilans.json, evals.json, analyses.json, photos/<id>.jpg.
+  // Chaque champ d'un jour garde son heure de saisie (ft) : à la fusion, la saisie la plus récente gagne, des deux côtés.
+  var GH = "https://api.github.com/repos/Toshka-1/Atlas-data", TK = "atlas-gh-token", ST = "atlas-gh-state", OK_AT = "atlas-gh-ok";
+  var SYNCED = ["days", "settings", "bilans", "evals", "analyses"], META = ["date", "updatedAt", "ft", "id"];
+  var PH = "atlas-photos", CFG = "atlas-cfg";
+  var ls = { get: function (k) { try { return localStorage.getItem(k); } catch (e) { return null; } }, set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) {} }, del: function (k) { try { localStorage.removeItem(k); } catch (e) {} } };
+  var cloud = { state: "off", err: "", dirty: false }, subs = [], timer = null, running = false, again = false;
+  var token = function () { return (ls.get(TK) || "").trim(); };
+  var gst = function () { var s = null; try { s = JSON.parse(ls.get(ST) || "null"); } catch (e) { s = null; } s = s && typeof s === "object" ? s : {}; s.sha = s.sha || {}; s.hash = s.hash || {}; s.photos = Array.isArray(s.photos) ? s.photos : []; return s; };
+  var sst = function (s) { ls.set(ST, JSON.stringify(s)); };
+  var status = function () { var s = gst(); return { state: cloud.state, err: cloud.err, at: ls.get(OK_AT) || "", configured: !!token(), pending: cloud.dirty || s.photos.length > 0, photos: s.photos.length }; };
+  var emit = function () { var st = status(); subs.forEach(function (f) { try { f(st); } catch (e) { console.error(e); } }); };
+  var setState = function (s, err) { cloud.state = s; cloud.err = err || ""; emit(); };
+  var stable = function (v) { return v == null ? "null" : Array.isArray(v) ? "[" + v.map(stable).join(",") + "]" : typeof v === "object" ? "{" + Object.keys(v).filter(function (x) { return v[x] != null; }).sort().map(function (x) { return JSON.stringify(x) + ":" + stable(v[x]); }).join(",") + "}" : JSON.stringify(v); };
+  var hash = function (t) { var h = 5381, i; for (i = 0; i < t.length; i++) h = ((h << 5) + h + t.charCodeAt(i)) | 0; return (h >>> 0).toString(16) + ":" + t.length; };
+  var pathOf = function (c, id) { return c === "days" ? (/^\d{4}-\d{2}-\d{2}$/.test(id) ? "days/" + id.slice(0, 7) + ".json" : null) : c + ".json"; };
+  var collOf = function (p) { return /^days\/\d{4}-\d{2}\.json$/.test(p) ? "days" : /^(settings|bilans|evals|analyses)\.json$/.test(p) ? p.slice(0, -5) : null; };
+  // un document par ligne, clés triées : le fichier ne change que si une donnée change
+  var fileText = function (docs) { var ids = Object.keys(docs).sort(); return "{\n" + ids.map(function (id) { return JSON.stringify(id) + ": " + stable(docs[id]); }).join(",\n") + "\n}\n"; };
+  var buildFiles = function () {
+    var out = {};
+    SYNCED.forEach(function (c) { Object.keys(db[c] || {}).forEach(function (id) { var p = pathOf(c, id); if (!p) return; (out[p] = out[p] || {})[id] = db[c][id]; }); });
+    var files = {}; Object.keys(out).forEach(function (p) { files[p] = fileText(out[p]); }); return files;
+  };
+  var mergeDay = function (l, r) {
+    if (!l) return copy(r);
+    var o = copy(l), lft = l.ft || {}, rft = r.ft || {}, ft = Object.assign({}, lft), keys = {};
+    Object.keys(r).concat(Object.keys(rft)).forEach(function (f) { if (META.indexOf(f) < 0) keys[f] = 1; });
+    Object.keys(keys).forEach(function (f) {
+      var a = rft[f] ? String(rft[f]) : "", b = lft[f] ? String(lft[f]) : "";
+      var take = a ? a > b : (!b && l[f] == null && r[f] != null);
+      if (!take) return;
+      if (r[f] == null) delete o[f]; else o[f] = copy(r[f]);
+      if (a) ft[f] = a;
+    });
+    o.ft = ft; o.date = l.date || r.date;
+    if (String(r.updatedAt || "") > String(o.updatedAt || "")) o.updatedAt = r.updatedAt;
+    return o;
+  };
+  var mergeDoc = function (c, l, r) {
+    if (!l) return copy(r);
+    var ru = String(r.updatedAt || ""), lu = String(l.updatedAt || "");
+    if (c === "settings") return ru > lu ? copy(r) : l;
+    return ru > lu || (!ru && !lu) ? copy(r) : l; // bilans, évaluations : écrits dans le dépôt par le bilan du lundi
+  };
+  var mergeIn = function (c, obj) {
+    var changed = false; db[c] = db[c] || {};
+    Object.keys(obj || {}).forEach(function (id) {
+      var r = obj[id]; if (!r || typeof r !== "object") return;
+      var l = db[c][id], m = c === "days" ? mergeDay(l, r) : mergeDoc(c, l, r);
+      if (stable(m) !== stable(l)) { db[c][id] = m; changed = true; }
+    });
+    return changed;
+  };
+  var b64text = function (t) { var u = new TextEncoder().encode(t), s = "", i; for (i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+  var b64buf = function (buf) { var u = new Uint8Array(buf), s = "", i; for (i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
+  var unb64 = function (b) { var s = atob(String(b).replace(/\s/g, "")), u = new Uint8Array(s.length), i; for (i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new TextDecoder().decode(u); };
+  var api = function (method, path, body) {
+    var ctl = typeof AbortController === "function" ? new AbortController() : null, t = ctl ? setTimeout(function () { ctl.abort(); }, 45000) : null;
+    return fetch(GH + path, { method: method, cache: "no-store", signal: ctl ? ctl.signal : undefined,
+      headers: Object.assign({ Authorization: "Bearer " + token(), Accept: "application/vnd.github+json" }, body ? { "Content-Type": "application/json" } : {}),
+      body: body ? JSON.stringify(body) : undefined })
+      .then(function (r) { clearTimeout(t); return r.text().then(function (x) { var j = null; try { j = x ? JSON.parse(x) : null; } catch (e) { j = null; } return { status: r.status, ok: r.ok, json: j }; }); },
+        function (e) { clearTimeout(t); throw { code: "net" }; });
+  };
+  var authErr = function (r) { if (r.status === 401) throw { code: "auth", msg: "Code refusé ou expiré." }; if (r.status === 403 && !/rate limit/i.test((r.json && r.json.message) || "")) throw { code: "auth", msg: "Ce code n'a pas le droit d'écrire dans Atlas-data (Contents : Read and write)." }; };
+  var photoUrl = function (id) { return new URL("./_blob/" + id, location.href).href; };
+  var cacheOpen = function (n) { return typeof caches !== "undefined" ? caches.open(n) : Promise.reject({ code: "no_cache" }); };
+  var putCfg = function () { var t = token(); return cacheOpen(CFG).then(function (c) { return t ? c.put(new URL("./__cfg", location.href).href, new Response(JSON.stringify({ t: t }), { headers: { "Content-Type": "application/json" } })) : c.delete(new URL("./__cfg", location.href).href); }).catch(function () {}); };
+
+  function syncOnce(round) {
+    var s = gst(), remote = {}, retry = false;
+    return api("GET", "/git/trees/main?recursive=1").then(function (r) {
+      authErr(r);
+      if (r.status === 404 && !(r.json && /empty/i.test(r.json.message || ""))) throw { code: "auth", msg: "Dépôt Atlas-data introuvable avec ce code : choisis-le dans « Only select repositories »." };
+      if (r.ok && r.json && Array.isArray(r.json.tree)) r.json.tree.forEach(function (x) { if (x.type === "blob") remote[x.path] = x.sha; });
+      else if (!(r.status === 404 || r.status === 409)) throw { code: "http", msg: "GitHub a répondu " + r.status + "." };
+      // 1) récupérer ce qui a changé dans le dépôt (autre téléphone, bilan du lundi)
+      var changedC = {}, todo = Object.keys(remote).filter(function (p) { return collOf(p) && remote[p] !== s.sha[p]; });
+      return todo.reduce(function (pr, p) {
+        return pr.then(function () { return api("GET", "/git/blobs/" + remote[p]).then(function (b) {
+          authErr(b); if (!b.ok || !b.json) throw { code: "http", msg: "Lecture de " + p + " impossible (" + b.status + ")." };
+          var txt = unb64(b.json.content), obj = null; try { obj = JSON.parse(txt); } catch (e) { obj = null; }
+          var c = collOf(p); if (obj && typeof obj === "object" && mergeIn(c, obj)) changedC[c] = 1;
+          s.sha[p] = remote[p]; s.hash[p] = hash(txt); sst(s);
+        }); });
+      }, Promise.resolve()).then(function () {
+        Object.keys(s.sha).forEach(function (p) { if (!remote[p]) { delete s.sha[p]; delete s.hash[p]; } });
+        if (Object.keys(changedC).length) { save(); Object.keys(changedC).forEach(deliver); }
+      });
+    }).then(function () {
+      // 2) photos prises sur ce téléphone, pas encore en ligne
+      return s.photos.slice().reduce(function (pr, id) {
+        return pr.then(function () {
+          var p = "photos/" + id + ".jpg", done = function () { s.photos = s.photos.filter(function (x) { return x !== id; }); sst(s); };
+          if (remote[p]) { done(); return; }
+          return cacheOpen(PH).then(function (c) { return c.match(photoUrl(id)); }).then(function (m) {
+            if (!m) { done(); return; }
+            return m.arrayBuffer().then(function (buf) { return api("PUT", "/contents/" + p, { message: "Atlas : photo " + id, content: b64buf(buf) }); }).then(function (r) {
+              authErr(r); if (r.ok || r.status === 422) { done(); emit(); return; } throw { code: "http", msg: "Envoi de photo refusé (" + r.status + ")." };
+            });
+          });
+        });
+      }, Promise.resolve());
+    }).then(function () {
+      // 3) envoyer ce qui a changé ici
+      var files = buildFiles(), paths = Object.keys(files).filter(function (p) { return hash(files[p]) !== s.hash[p]; });
+      return paths.reduce(function (pr, p) {
+        return pr.then(function () {
+          var body = { message: "Atlas : " + p, content: b64text(files[p]) }; if (remote[p]) body.sha = remote[p];
+          return api("PUT", "/contents/" + p, body).then(function (r) {
+            authErr(r);
+            if (r.status === 409 || r.status === 422) { retry = true; return; } // modifié ailleurs entre-temps : on relit puis on renvoie
+            if (!r.ok || !r.json || !r.json.content) throw { code: "http", msg: "Envoi refusé (" + r.status + ")." };
+            s.sha[p] = r.json.content.sha; s.hash[p] = hash(files[p]); remote[p] = r.json.content.sha; sst(s);
+          });
+        });
+      }, Promise.resolve());
+    }).then(function () {
+      if (retry && round < 2) return syncOnce(round + 1);
+      if (retry) throw { code: "http", msg: "Conflit avec le dépôt, nouvel essai bientôt." };
+    });
+  }
+  function run() {
+    clearTimeout(timer); timer = null;
+    if (running) { again = true; return; }
+    if (!token()) { setState("off"); return; }
+    if (navigator.onLine === false) { setState("offline"); return; }
+    running = true; var wasDirty = cloud.dirty; cloud.dirty = false; setState("sync");
+    syncOnce(0).then(function () {
+      running = false; ls.set(OK_AT, new Date().toISOString()); setState("ok");
+      if (again) { again = false; schedule(1500); }
+    }, function (e) {
+      running = false; cloud.dirty = cloud.dirty || wasDirty;
+      var c = (e && e.code) || "net";
+      if (c === "auth") { setState("auth", e.msg); return; }
+      setState(c === "net" || navigator.onLine === false ? "offline" : "error", e && e.msg);
+      schedule(again ? 3000 : 60000); again = false;
+    });
+  }
+  function schedule(ms) { if (!token()) return; clearTimeout(timer); timer = setTimeout(run, ms); }
+  function touched(c) { if (SYNCED.indexOf(c) < 0) return; cloud.dirty = true; emit(); schedule(4000); }
+  window.addEventListener("online", function () { schedule(400); });
+  window.addEventListener("offline", function () { if (token()) setState("offline"); });
+  document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") schedule(800); });
+  setInterval(function () { if (document.visibilityState === "visible" && !running && cloud.state !== "auth") schedule(0); }, 120000);
+  if (token()) { cloud.state = navigator.onLine === false ? "offline" : "sync"; putCfg(); schedule(1200); }
+
+  window.__atlasCloud = {
+    status: status,
+    on: function (f) { subs.push(f); return function () { subs = subs.filter(function (g) { return g !== f; }); }; },
+    setToken: function (t) { t = String(t || "").trim(); if (!t) return false; ls.set(TK, t); putCfg(); setState("sync"); schedule(0); return true; },
+    clearToken: function () { ls.del(TK); putCfg(); setState("off"); },
+    syncNow: function () { schedule(0); }
+  };
+
+  // ---------- photos : gardées sur le téléphone, puis envoyées dans le dépôt ----------
+  var assets = {
+    upload: function (blob) {
+      var id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8), type = blob.type || "image/jpeg";
+      return cacheOpen(PH).then(function (c) { return c.put(photoUrl(id), new Response(blob, { headers: { "Content-Type": type } })); }, function () { throw { code: "quota_or_state" }; })
+        .then(function () { var s = gst(); s.photos.push(id); sst(s); emit(); schedule(3000); return { id: id, url: URL.createObjectURL(blob), sizeBytes: blob.size, contentType: type }; });
+    },
+    delete: function (id) { var s = gst(); s.photos = s.photos.filter(function (x) { return x !== id; }); sst(s); return cacheOpen(PH).then(function (c) { return c.delete(photoUrl(id)); }).then(function () {}, function () {}); },
+    list: function () { return Promise.resolve({ assets: [], usage: {} }); }
+  };
+  var dbApi = { collection: coll };
+  window.claude = { use: function (n) { return Promise.resolve(n === "db" ? dbApi : n === "assets" ? assets : null); } };
 })();
 </script></head><body><title>Atlas</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -84,7 +253,18 @@
 .syncbox { min-height: 64px; font-size: 12px; line-height: 1.35; font-family: ui-monospace, Menlo, monospace }
 .synccard .btn + .btn { margin-top: 8px }
 .synccard textarea { min-height: 64px }
-.syncok { color: var(--good); font-weight: 600 } /* saisies retirées le 19 nov (FC repos, VFC, sommeil, douleur, poids, import Santé) : données gardées */
+.syncok { color: var(--good); font-weight: 600 }
+.cloudslim { display: flex; align-items: center; gap: 10px; min-height: 40px }
+.cloudslim .cdot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--good) }
+.cloudslim[data-s="busy"] .cdot { background: var(--warn) }
+.cloudslim[data-s="err"] .cdot { background: var(--bad) }
+.cloudslim p { flex: 1; min-width: 0; margin: 0; font-size: 13.5px; line-height: 1.4 }
+.cloudslim .linkish2 { flex: none }
+#synccard-l.slim { padding-top: 10px; padding-bottom: 10px }
+#cloudtok { padding-right: 12px; font-size: 15px }
+#cloudsetup .btn { margin-top: 10px }
+#cloudsetup .linkish2 { display: inline-block; margin-top: 4px }
+#cloudsetup ol { margin: 4px 0 10px; padding-left: 20px; display: grid; gap: 5px; font-size: 13.5px; line-height: 1.45 } /* saisies retirées le 19 nov (FC repos, VFC, sommeil, douleur, poids, import Santé) : données gardées */
 .trophies { display: grid; gap: 8px }
 .trophy { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface) }
 .trophy .medal { font-size: 24px; line-height: 1; text-align: center }
@@ -669,6 +849,19 @@ details.howto .exideas { margin-top: 6px }
 
 <main class="wrap view" id="view-jour" role="tabpanel" aria-labelledby="tab-jour">
   <section class="card synccard" id="synccard-l" hidden>
+    <div class="cloudslim" id="cloudslim" hidden><i class="cdot" aria-hidden="true"></i><p id="cloudline" role="status"></p><button class="linkish2" id="cloudnow" type="button">Synchroniser</button></div>
+    <div id="cloudfull">
+      <div class="ch"><h2>Sauvegarde en ligne</h2><span class="aside">dépôt privé Atlas-data</span></div>
+      <p class="hint" id="cloudstate"></p>
+      <div id="cloudsetup">
+        <ol><li>Sur GitHub, crée un code (Fine-grained token) : seulement le dépôt Atlas-data, Contents en Read and write.</li><li>Colle-le ici, une seule fois. Il reste sur ce téléphone, ne l'envoie à personne.</li></ol>
+        <label class="f"><span class="lab">Code GitHub</span><span class="inp"><input type="text" id="cloudtok" style="-webkit-text-security:disc" placeholder="github_pat_…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done"></span></label>
+        <button class="btn" id="cloudsave" type="button">Activer la sauvegarde</button>
+        <a class="linkish2" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Créer le code sur GitHub</a>
+      </div>
+      <p class="hint" id="cloudmsg" role="status" hidden></p>
+    </div>
+    <div class="gone">
     <div class="ch"><h2>Envoyer vers Atlas</h2><span class="aside" id="syncwhen-l"></span></div>
     <p class="hint" id="syncstate-l"></p>
     <button class="btn" id="syncout-l" type="button">Copier pour Atlas</button>
@@ -680,6 +873,7 @@ details.howto .exideas { margin-top: 6px }
       <textarea id="syncin-l" rows="2" placeholder="Appui long ici, puis Coller" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Coller l'historique copié dans Atlas"></textarea>
       <button class="btn ghost" id="syncgo-l" type="button">Importer</button>
     </details>
+    </div>
   </section>
 
   <section class="card hkcard gone" id="hkcard" hidden>
@@ -881,7 +1075,7 @@ sommeil: Somme</pre></li>
 
   <section class="card synccard" id="synccard-a">
     <div class="ch"><h2>Appli hors ligne</h2><span class="aside">sur l'écran d'accueil</span></div>
-    <p class="hint">Dans l'appli hors ligne, rien ne se perd, même sans réseau et onglet fermé : <a href="https://toshka-1.github.io/Atlas/" target="_blank" rel="noopener">toshka-1.github.io/Atlas</a>. De retour sur le réseau, elle copie tes saisies : colle-les ici.</p>
+    <p class="hint">Atlas vit maintenant sur ton écran d'accueil : <a href="https://toshka-1.github.io/Atlas/" target="_blank" rel="noopener">toshka-1.github.io/Atlas</a>. Elle garde tout sans réseau et sauvegarde toute seule en ligne. Cette page ne sert plus qu'en secours.</p>
     <textarea id="syncin-a" rows="2" placeholder="Appui long ici, puis Coller" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Coller le texte copié dans l'appli hors ligne"></textarea>
     <button class="btn" id="syncgo-a" type="button">Importer</button>
     <button class="btn ghost" id="syncout-a" type="button">Copier l'historique pour l'appli hors ligne</button>
@@ -1868,7 +2062,7 @@ sommeil: Somme</pre></li>
   };
 
   // ---------- photos ----------
-  const srcFor = (id) => blobUrls[id] || "/_blob/" + id;
+  const srcFor = (id) => blobUrls[id] || (window.__ATLAS_LOCAL ? "./_blob/" : "/_blob/") + id;
   function getAssets() { if (!assetsP) assetsP = (window.claude ? Promise.resolve(claude.use("assets")) : Promise.resolve(null)).catch(() => null); return assetsP; }
   const poseOf = (p) => (POSES.includes(p.pose) ? p.pose : "Autre");
   function photoButton(id, alt) {
@@ -2144,7 +2338,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v18";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v19";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
@@ -2692,7 +2886,7 @@ sommeil: Somme</pre></li>
   }
   var syncReady = false; // paintSync peut tourner avant ce bloc (au démarrage)
   $("synccard-l").hidden = !LOCAL; $("synccard-a").hidden = LOCAL;
-  if (LOCAL) { ["guidebtn", "addphoto-wrap"].forEach((id) => { const x = $(id); if (x) x.classList.add("gone"); }); if (!Object.keys(srv).length) $("synchist-l").open = true; }
+  
   $("syncin" + sfx).addEventListener("input", () => onSyncIn(true));
   $("syncgo" + sfx).onclick = () => onSyncIn(false);
   $("syncout" + sfx).onclick = async () => {
@@ -2704,6 +2898,40 @@ sommeil: Somme</pre></li>
     } else syncSay(ok ? "Historique copié. Dans l'appli hors ligne, colle-le sous « Récupérer ton historique depuis Atlas »." : "Copie automatique impossible : sélectionne tout le texte ci-dessus et copie-le.", ok);
   };
   syncReady = true; paintSyncCard();
+  // ---------- sauvegarde en ligne (appli de l'écran d'accueil) ----------
+  let cloudEdit = false;
+  function paintCloud() {
+    const CL = window.__atlasCloud; if (!LOCAL || !CL) return;
+    const st = CL.status(), at = st.at && !isNaN(Date.parse(st.at)) ? new Date(st.at) : null;
+    const when = at ? (at.toDateString() === new Date().toDateString() ? "à " + hhmm(at) : "le " + fmtDM(st.at.slice(0, 10)) + " à " + hhmm(at)) : "";
+    const full = !st.configured || st.state === "auth" || cloudEdit;
+    $("synccard-l").classList.toggle("slim", !full); $("cloudslim").hidden = full; $("cloudfull").hidden = !full;
+    if (full) {
+      $("cloudstate").textContent = st.state === "auth" ? (st.err || "Code refusé.") + " Refais un code et colle-le ici : tes saisies restent sur le téléphone en attendant."
+        : st.configured ? "Colle le nouveau code pour le remplacer."
+        : "Pour ne plus rien perdre, même en changeant de téléphone : tout ce que tu notes ici est recopié tout seul dans ton dépôt GitHub privé dès que tu as du réseau.";
+      return;
+    }
+    const sl = $("cloudslim"), line = $("cloudline"), ph = st.photos ? " (" + st.photos + " " + plural(st.photos, "photo", "photos") + " en attente)" : "";
+    if (st.state === "sync") { sl.dataset.s = "busy"; line.textContent = "Synchronisation…"; }
+    else if (st.state === "offline") { sl.dataset.s = "busy"; line.textContent = "Pas de réseau : tout reste sur l'iPhone et partira tout seul" + ph + "."; }
+    else if (st.state === "error") { sl.dataset.s = "err"; line.textContent = "Pas encore envoyé, nouvel essai automatique. " + (when ? "Dernière sauvegarde " + when + "." : ""); }
+    else if (st.pending) { sl.dataset.s = "busy"; line.textContent = "Modifs à envoyer" + ph + (when ? " · dernière sauvegarde " + when : "") + "."; }
+    else { sl.dataset.s = "ok"; line.textContent = "Sauvegardé en ligne" + (when ? " " + when : "") + "."; }
+  }
+  if (LOCAL && window.__atlasCloud) {
+    window.__atlasCloud.on(paintCloud);
+    const cmsg = (t, good) => { const m = $("cloudmsg"); m.textContent = t; m.hidden = !t; m.classList.toggle("syncok", !!good); };
+    $("cloudsave").onclick = () => {
+      const v = $("cloudtok").value.trim();
+      if (!/^(github_pat_|ghp_)[A-Za-z0-9_]{20,}$/.test(v)) { cmsg("Ce n'est pas un code GitHub : il commence par github_pat_."); return; }
+      flushSave(); window.__atlasCloud.setToken(v); $("cloudtok").value = ""; cloudEdit = false; cmsg(""); paintCloud();
+    };
+    $("cloudtok").addEventListener("keydown", (e) => { if (e.key === "Enter") $("cloudsave").click(); });
+    $("cloudnow").onclick = () => { flushSave(); window.__atlasCloud.syncNow(); };
+    $("cloudline").addEventListener("dblclick", () => { cloudEdit = true; paintCloud(); });
+    paintCloud();
+  }
   $("histmore").onclick = () => { histAll = !histAll; renderHist(); if (!histAll) $("histmore").scrollIntoView({ block: "nearest" }); };
   $("progex").onchange = () => { progSel = $("progex").value; store.set("carnet-progex", progSel); renderProgress(); };
   function drawProgress(h) {
