@@ -287,6 +287,25 @@
 .planrow button { min-height: 36px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: 600 13.5px var(--body); cursor: pointer }
 .planrow button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff }
 .planbtns { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px }
+.set.pr input.w, .set.pr input.r { border-color: #E2C25A; background: #FBF3D6; color: #4A3600 }
+.set.pr .x { font-size: 0 } .set.pr .x::before { content: "🏆"; font-size: 16px }
+.gbar { position: relative; height: 10px; border-radius: 999px; background: var(--sunk); margin: 12px 0 4px; overflow: hidden }
+.gbar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--accent) }
+.gbar b { position: absolute; top: -3px; bottom: -3px; width: 2px; background: var(--ink); opacity: .55 }
+.gscale2 { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted) }
+.gstat { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; margin-top: 4px }
+.gstat strong { font: 800 34px/1 var(--display) }
+.gstat span { font-size: 14px; color: var(--muted) }
+.gstat.good strong { color: var(--good) } .gstat.warn strong { color: var(--warn) }
+.gobjs { display: grid; gap: 8px; margin: 12px 0 4px; padding: 0; list-style: none }
+.gobjs li { display: grid; grid-template-columns: 26px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 14px; line-height: 1.4 }
+.gobjs li > span:first-child { font-size: 17px; line-height: 1.2; text-align: center }
+.gobjs li em { display: block; font-style: normal; color: var(--muted); font-size: 13px }
+.gstop { margin: 12px 0 4px; padding: 12px; border-radius: 12px; background: var(--good-soft); color: var(--ink); font-size: 14px; line-height: 1.45 }
+.gstop .btn { margin-top: 10px }
+.gnext { margin-top: 8px; font-size: 13.5px; color: var(--muted) }
+.gtogs { display: grid; gap: 8px; margin: 10px 0 }
+#goalcard .linkish2 { margin-top: 6px }
 .trophy .nomedal { font-size: 20px; opacity: .55 }
 .trophy .lvl { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--sunk); color: var(--muted) }
 .trophy .lvl.l3, .trophy .lvl.l4 { background: #F6E7B0; color: #6B4E00 }
@@ -1050,6 +1069,27 @@ sommeil: Somme</pre></li>
 </main>
 
 <main class="wrap view" id="view-hist" role="tabpanel" aria-labelledby="tab-hist" hidden>
+  <section class="card" id="goalcard">
+    <div class="ch"><h2 id="goaltitle">Objectif de la phase</h2><span class="aside" id="goalaside"></span></div>
+    <div id="goalbody"></div>
+    <details class="howto" id="goaledit"><summary id="goaleditsum">Régler l'objectif</summary>
+      <div class="grid2">
+        <label class="f"><span class="lab">Fin prévue</span><input type="date" id="gend"></label>
+        <label class="f"><span class="lab">Gras à perdre</span><span class="inp"><input type="text" inputmode="decimal" id="gkg" placeholder="5" autocomplete="off"><i>kg</i></span></label>
+      </div>
+      <div class="gtogs">
+        <button class="tog" id="gbench" type="button" aria-pressed="true">Garder la force au développé couché</button>
+        <button class="tog" id="gabs" type="button" aria-pressed="true">Abdos nets en photo</button>
+      </div>
+      <div class="grid2">
+        <label class="f"><span class="lab">Point d'étape</span><input type="date" id="gstep1"></label>
+        <label class="f"><span class="lab">Autre point (facultatif)</span><input type="date" id="gstep2"></label>
+      </div>
+      <p class="hint" id="gmsg" role="status" hidden></p>
+      <button class="btn" id="gsave" type="button">Enregistrer l'objectif</button>
+    </details>
+  </section>
+
   <section class="card coach">
     <div class="ch"><h2>Bilan du lundi</h2><span class="aside" id="bilanwhen"></span></div>
     <div id="bilan" class="analysis"></div>
@@ -1349,6 +1389,28 @@ sommeil: Somme</pre></li>
     };
     const strict = session ? collect(true) : [];
     return strict.length ? strict : collect(false);
+  }
+  // ---------- record en direct ----------
+  // Pendant la séance : une série de travail qui dépasse ta meilleure série de toujours (même exercice, même machine, même famille d'unité)
+  // passe en doré, et un message s'affiche une fois la saisie posée (pas à chaque chiffre tapé).
+  const prSaid = {}, prTimers = {};
+  function livePR(row, ex, st, key, typed) {
+    const nn = norm(ex.name), ok = nn && !st.wu && isNum(st.w) && st.w > 0 && isNum(st.r) && st.r > 0;
+    let pr = false, prev = null;
+    if (ok) {
+      const unit = ex.unit || "kg", bs = bestsBefore(ex.name, cur, undefined, ex.machine, unit);
+      if (bs.length) { prev = Math.max.apply(null, bs); pr = toKg(st.w, unit) * (1 + st.r / 30) > prev + 0.05; }
+    }
+    row.classList.toggle("pr", pr);
+    const sn = row.querySelector(".sn"); if (sn) sn.title = pr ? "Nouveau record" : "";
+    if (!typed) return;
+    const k = cur + "|" + key; clearTimeout(prTimers[k]);
+    if (!pr) return;
+    prTimers[k] = setTimeout(() => {
+      const sig = norm(ex.name) + "|" + st.w + "x" + st.r; if (prSaid[k] === sig) return; prSaid[k] = sig;
+      toast("🏆 Nouveau record : " + exLabel(ex) + ", " + show(st.w) + " × " + st.r + (isPl(ex.unit) ? " plaques" : " " + (ex.unit || "kg")) + " !");
+      if (navigator.vibrate) try { navigator.vibrate(60); } catch (e) {}
+    }, 1200);
   }
   // À ±2,5 % (environ 1 rep), c'est la même perf : « maintenu », l'objectif en sèche. Une vraie baisse est au-delà.
   const TOL = 2.5;
@@ -2061,17 +2123,17 @@ sommeil: Somme</pre></li>
       paintSn();
       const openMenu = () => { setMenu = open ? null : mk; store.set("carnet-tech-seen", "1"); renderExercises(open ? "#sn-" + i + "-" + j : "#smb-" + i + "-" + j + "-" + kind); };
       sn.onclick = openMenu;
-      wIn.addEventListener("input", () => { st.w = num(wIn.value); row.classList.toggle("done", filled(st)); paintSn(); queueSave(); paintStat(card, ex, last); });
+      wIn.addEventListener("input", () => { st.w = num(wIn.value); row.classList.toggle("done", filled(st)); paintSn(); queueSave(); paintStat(card, ex, last); livePR(row, ex, st, i + "-" + j, true); });
       rIn.addEventListener("input", () => {
         st.r = num(rIn.value);
         // Même charge que la série d'avant (du même type) si la charge est vide : la valeur apparaît dans la case, modifiable.
         if (st.r != null && !isNum(st.w)) { const pw = ex.sets.slice(0, j).reverse().find((x) => isNum(x.w) && !!x.wu === wu); if (pw) { st.w = pw.w; wIn.value = show(st.w); } }
-        row.classList.toggle("done", filled(st)); paintSn(); queueSave(); paintStat(card, ex, last);
+        row.classList.toggle("done", filled(st)); paintSn(); queueSave(); paintStat(card, ex, last); livePR(row, ex, st, i + "-" + j, true);
       });
       const rm = iconBtn("minus", "Supprimer la " + label);
       rm.onclick = () => { ex.sets.splice(j, 1); queueSave(); renderExercises(); };
       row.append(sn, wIn, el("span", "x", "×"), rIn, rm);
-      sets.appendChild(row);
+      sets.appendChild(row); livePR(row, ex, st, i + "-" + j, false);
       if (open) {
         const m = el("div", "setmenu"); m.id = "sm-" + i + "-" + j; m.setAttribute("role", "group"); m.setAttribute("aria-label", "Type de la " + label);
         [["n", "Série normale"], ["wu", "Échauffement"]].concat(TECH).forEach(([k, x]) => {
@@ -2464,7 +2526,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v22";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v23";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
@@ -2708,7 +2770,7 @@ sommeil: Somme</pre></li>
      [lab("Actives moy.", na), aa == null ? "—" : fmtN(aa), aa == null ? null : ["kcal montre", ""]]]
       .forEach(([l, v, d]) => { const t = el("div", "kpi"); t.append(el("span", null, l), el("strong", null, v)); if (d) t.appendChild(el("em", d[1], d[0])); $("kpis").appendChild(t); });
     renderChart(ra);
-    if (view === "hist") { renderWeight(); renderTrophies(); renderProgress(); renderCompare(); }
+    if (view === "hist") { try { renderGoal(); } catch (e) { console.error(e); } renderWeight(); renderTrophies(); renderProgress(); renderCompare(); }
   }
   // Graphiques : 1 unité SVG = 1 px, pour que les textes gardent leur vraie taille sur téléphone.
   function svgText(x, y, txt, anchor, extra) { return '<text x="' + x + '" y="' + y + '" text-anchor="' + (anchor || "start") + '" font-size="11" fill="var(--muted)"' + (extra || "") + ">" + txt + "</text>"; }
@@ -2899,6 +2961,133 @@ sommeil: Somme</pre></li>
     $("progalert").hidden = !drops.length;
     $("progalert").textContent = drops.length ? "En baisse sur 2 séances de suite : " + drops.join(", ") + ". D'après ton plan, c'est le signal pour remonter de 200 kcal (et vérifier sommeil et fatigue)." : "";
   }
+  // ---------- objectif de la phase (demandé le 20 nov) ----------
+  // Une date de fin, des objectifs (gras à perdre, force tenue, abdos nets), des points d'étape.
+  // Analyse : en avance ou en retard, projection, et arrêt anticipé proposé quand tout est atteint.
+  // Gras perdu estimé à partir du déficit montre, compté à 75 % : la montre surestime la dépense en muscu.
+  const WATCH_F = 0.75, BENCH_RE = /^developpe couche(?!.*(halt|smith|incline))/;
+  const daysBetween = (a, b) => Math.round((parseKey(b) - parseKey(a)) / 864e5);
+  function goalProposal() { // d'après son plan : fin vers mars (mai au plus tard), ~85 → ~80 kg, bilan le 21 déc
+    const p = phaseAt(todayKey());
+    if (p === "seche") return { p, end: "2027-03-31", kg: 5, bench: true, abs: true, absOk: false, steps: ["2026-12-21"].filter((x) => x > todayKey()) };
+    return { p, end: shift(todayKey(), 84), bench: true, abs: false, absOk: false, steps: [] };
+  }
+  function benchBest(from, to) {
+    let b = null;
+    Object.keys(days).filter((k) => k >= from && k <= to).forEach((k) => (Array.isArray(days[k].workout) ? days[k].workout : []).forEach((ex) => {
+      if (isPl(ex.unit) || !BENCH_RE.test(norm(ex.name)) || /unilat/.test(norm(ex.machine))) return;
+      (ex.sets || []).filter(work).forEach((st) => {
+        if (!isNum(st.w) || st.w <= 0) return;
+        const kg = toKg(st.w, ex.unit) + (ex.unit === "lb" ? 45 * LB : 20), e = kg * (1 + Math.min(15, st.r) / 30);
+        if (!b || e > b.e) b = { e, k, st, u: ex.unit || "kg" };
+      });
+    }));
+    return b;
+  }
+  function goalStats(g, at) {
+    const t = at || todayKey(), F = phaseFrom(t) || SECHE_START, E = g.end, last = t < E ? t : E;
+    const total = Math.max(1, daysBetween(F, E) + 1), elapsed = Math.max(0, Math.min(total, daysBetween(F, t) + 1));
+    const ra = restAvg(); let sum = 0, n = 0, gaps = 0;
+    for (let k = F; k <= last; k = shift(k, 1)) {
+      if (k >= MIAMI[0] && k <= MIAMI[1]) continue; // voyage : entretien voulu
+      const d = k === cur ? state : days[k], df = d ? defOf(d, ra) : null;
+      if (df) { sum += df.v; n++; } else if (k < t) gaps++;
+    }
+    const avg = n ? sum / n : null, kgDay = avg != null ? (avg * WATCH_F) / KCAL_PER_KG_FAT : null;
+    const lost = avg != null ? ((sum + avg * gaps) * WATCH_F) / KCAL_PER_KG_FAT : 0;
+    const r = { F, E, total, elapsed, avg, n, lost, kgDay, left: Math.max(0, daysBetween(t, E)) };
+    if (g.kg) {
+      r.expected = (g.kg * elapsed) / total; r.perDay = g.kg / total;
+      r.aheadDays = Math.round((lost - r.expected) / r.perDay);
+      r.kgMet = lost >= g.kg;
+      if (kgDay > 0 && !r.kgMet) r.eta = shift(t, Math.ceil((g.kg - lost) / kgDay));
+      if (r.kgMet) r.eta = t;
+    }
+    if (g.bench) {
+      const ref = benchBest(shift(F, -42), shift(F, -1)), now = benchBest(shift(t, -27), t);
+      r.bench = { ref, now, ok: ref && now ? now.e >= ref.e * 0.95 : null };
+    }
+    if (g.abs) { const ev = evals && evals.muscles && evals.muscles.abdos; r.abs = { photo: ev ? ev.v : null, date: evals ? evals.date : null, ok: !!g.absOk || (ev && ev.v === "fort") }; }
+    const objs = []; if (g.kg) objs.push(!!r.kgMet); if (g.bench) objs.push(r.bench.ok !== false); if (g.abs) objs.push(!!r.abs.ok);
+    r.allMet = objs.length > 0 && objs.every(Boolean) && (!g.kg || r.kgMet) && (!g.abs || r.abs.ok);
+    return r;
+  }
+  function saveGoal(g) { const next = clone(SET); next.goal = Object.assign({}, g, { at: new Date().toISOString() }); next.updatedAt = new Date().toISOString(); applySettings(next); }
+  function stopPhaseNow() { // objectifs atteints : passer en maintien dès aujourd'hui
+    const t = todayKey(), next = clone(SET), ph = next.phases.filter((x) => x.from < t); ph.push({ p: "maintien", from: t }); next.phases = ph;
+    next.updatedAt = new Date().toISOString(); const old = clone(SET); applySettings(next);
+    toast("Maintien depuis aujourd'hui : cibles à jour", () => { const back = clone(old); back.updatedAt = new Date().toISOString(); applySettings(back); });
+  }
+  function renderGoal() {
+    const box = $("goalbody"), t = todayKey(), p = phaseAt(t), g0 = SET.goal && SET.goal.p === p ? SET.goal : null, g = g0 || goalProposal();
+    box.innerHTML = "";
+    $("goaltitle").textContent = "Objectif " + (p === "seche" ? "de la sèche" : p === "pdm" ? "de la prise de masse" : "du maintien");
+    $("goalaside").textContent = g0 ? "fin prévue " + fmtDM(g.end) : "à valider";
+    // éditeur pré-rempli
+    $("gend").value = g.end; $("gkg").value = g.kg ? show(g.kg) : ""; $("gbench").setAttribute("aria-pressed", String(!!g.bench)); $("gabs").setAttribute("aria-pressed", String(!!g.abs));
+    $("gstep1").value = (g.steps || [])[0] || ""; $("gstep2").value = (g.steps || [])[1] || "";
+    $("goaleditsum").textContent = g0 ? "Modifier l'objectif" : "Changer la proposition";
+    if (!g0) {
+      const pr = el("div", "gstop");
+      pr.appendChild(el("p", null, "Proposition d'après ton plan : fin le " + fmtLong(g.end) + (g.kg ? ", environ " + show(g.kg) + " kg de gras en moins" : "") + (g.bench ? ", force gardée au développé couché" : "") + (g.abs ? ", abdos nets" : "") + ((g.steps || []).length ? ", point d'étape le " + g.steps.map((x) => fmtDM(x).replace(/\.$/, "")).join(" et ") : "") + "."));
+      const b = el("button", "btn", "Valider cet objectif"); b.type = "button"; b.onclick = () => { saveGoal(g); toast("Objectif enregistré"); };
+      pr.appendChild(b); box.appendChild(pr);
+    }
+    const st = goalStats(g), ended = t >= g.end;
+    // temps écoulé
+    const bar = el("div", "gbar"), fill = el("i"); fill.style.width = Math.round((st.elapsed / st.total) * 100) + "%"; bar.appendChild(fill);
+    (g.steps || []).forEach((x) => { if (x > st.F && x < st.E) { const m = el("b"); m.style.left = Math.round((daysBetween(st.F, x) / st.total) * 100) + "%"; m.title = "Point d'étape " + fmtDM(x); bar.appendChild(m); } });
+    bar.setAttribute("role", "img"); bar.setAttribute("aria-label", "Jour " + st.elapsed + " sur " + st.total);
+    const sc = el("div", "gscale2"); sc.append(el("span", null, fmtDM(st.F)), el("span", null, ended ? "terminé" : "jour " + st.elapsed + " / " + st.total), el("span", null, fmtDM(st.E)));
+    // chiffre principal
+    const top = el("div", "gstat");
+    if (g.kg && st.avg != null) {
+      const ahead = st.aheadDays, cls = ahead >= 3 ? "good" : ahead <= -7 ? "warn" : "";
+      top.className = "gstat " + cls;
+      top.append(el("strong", null, st.lost.toFixed(1).replace(".", ",") + " kg"), el("span", null, "de gras perdus (estimé) sur " + show(g.kg) + " visés · " + (st.kgMet ? "objectif atteint" : Math.abs(ahead) < 3 ? "dans le rythme" : ahead > 0 ? "en avance de " + ahead + " j" : "en retard de " + -ahead + " j")));
+    } else top.append(el("strong", null, ended ? "Fin" : "J-" + st.left), el("span", null, ended ? "de la phase prévue le " + fmtDM(g.end) : "avant la fin prévue le " + fmtDM(g.end)));
+    box.append(top, bar, sc);
+    // objectifs un par un
+    const ul = el("ul", "gobjs");
+    const li = (ok, txt, sub) => { const x = el("li"); x.append(el("span", null, ok === true ? "✅" : ok === false ? "⚠️" : "⏳"), el("div")); x.lastChild.append(document.createTextNode(txt)); if (sub) x.lastChild.appendChild(el("em", null, sub)); ul.appendChild(x); };
+    if (g.kg) li(st.kgMet ? true : null, "Gras : " + show(Math.round(st.lost * 10) / 10) + " / " + show(g.kg) + " kg", st.avg == null ? "Note tes kcal et ta dépense pour l'estimer." : st.kgMet ? "Atteint." : st.eta ? "À ce rythme (déficit moyen " + fmtN(Math.round(st.avg)) + " kcal, compté à 75 %) : atteint vers le " + fmtLong(st.eta) + (st.eta < g.end ? ", " + daysBetween(st.eta, g.end) + " j avant la fin prévue." : st.eta > g.end ? ", " + daysBetween(g.end, st.eta) + " j après la fin prévue." : ".") : "Déficit moyen trop faible pour une projection.");
+    if (g.bench) {
+      const b = st.bench, fmtB = (x) => show(x.st.w) + "×" + x.st.r + " " + x.u + " (≈ " + Math.round(x.e) + " kg max)";
+      li(b.ok, "Force au développé couché" + (b.ok ? " tenue" : b.ok === false ? " en baisse" : ""), b.ref && b.now ? "Avant la phase : " + fmtB(b.ref) + " · 4 dernières semaines : " + fmtB(b.now) : "Pas encore assez de séances notées pour comparer.");
+    }
+    if (g.abs) {
+      const a = st.abs, w = { fort: "nets", moyen: "pas encore nets", retard: "encore couverts" };
+      li(a.ok ? true : null, "Abdos nets", g.absOk ? "Tu as jugé ton physique satisfaisant." : a.photo ? "Dernier avis photo (" + fmtDM(a.date) + ") : " + w[a.photo] + "." : "Jugé sur les photos du lundi.");
+    }
+    box.appendChild(ul);
+    if (g0 && g.abs) {
+      const sat = el("button", "linkish2", g.absOk ? "Annuler « physique satisfaisant »" : "Je suis satisfait de mon physique"); sat.type = "button";
+      sat.onclick = () => { const ng = clone(g0); ng.absOk = !ng.absOk; saveGoal(ng); }; box.appendChild(sat);
+    }
+    // arrêt anticipé, bilan de fin, prochain point
+    if (g0 && st.allMet && !ended && p === "seche") {
+      const stop = el("div", "gstop");
+      stop.appendChild(el("p", null, "Tous tes objectifs sont atteints, " + st.left + " j avant la date prévue. Tu peux arrêter la sèche ici et passer en maintien : inutile d'aller plus bas si le résultat te plaît."));
+      const b = el("button", "btn", "Passer en maintien aujourd'hui"); b.type = "button"; b.onclick = stopPhaseNow; stop.appendChild(b); box.appendChild(stop);
+    } else if (g0 && ended) {
+      box.appendChild(el("div", "gstop", "Bilan de fin : " + (st.allMet ? "objectifs atteints. Passe en maintien (bouton sous le nom Atlas), ou fixe une nouvelle date si tu veux aller plus loin." : "date atteinte, objectifs pas tous remplis. Prolonge avec une nouvelle date de fin, ou passe en maintien si le physique te plaît déjà.") + " Le bilan détaillé arrive dans le fil."));
+    }
+    const nx = (g.steps || []).find((x) => x >= t);
+    if (nx && !ended) box.appendChild(el("p", "gnext", nx === t ? "Point d'étape aujourd'hui : ton bilan détaillé arrive dans le fil." : "Prochain point d'étape : " + fmtLong(nx) + " (dans " + daysBetween(t, nx) + " j)."));
+  }
+  ["gbench", "gabs"].forEach((id) => { $(id).onclick = () => $(id).setAttribute("aria-pressed", String($(id).getAttribute("aria-pressed") !== "true")); });
+  $("gsave").onclick = () => {
+    const t = todayKey(), p = phaseAt(t), end = $("gend").value, kg = num($("gkg").value), msg = $("gmsg");
+    const bad = (x) => { msg.textContent = x; msg.hidden = false; };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(end) || end <= t) { bad("Choisis une date de fin après aujourd'hui."); return; }
+    if (kg != null && (kg <= 0 || kg > 30)) { bad("Gras à perdre : entre 0,5 et 30 kg, ou laisse vide."); return; }
+    const steps = [$("gstep1").value, $("gstep2").value].filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x) && x < end);
+    const prev = SET.goal && SET.goal.p === p ? SET.goal : {};
+    const g = { p, end, bench: $("gbench").getAttribute("aria-pressed") === "true", abs: $("gabs").getAttribute("aria-pressed") === "true", absOk: !!prev.absOk, steps };
+    if (kg != null) g.kg = Math.round(kg * 10) / 10;
+    msg.hidden = true; $("goaledit").open = false; saveGoal(g); toast("Objectif enregistré");
+  };
+
   // ---------- salle des trophées ----------
   // Seulement les gros exercices, ceux où connaître son record sert à se comparer (demande du 19 nov).
   // Record = meilleure série de travail en 1RM estimé (Epley, 15 reps au plus), par exercice et par machine.
@@ -3821,7 +4010,7 @@ sommeil: Somme</pre></li>
     VIEWS.forEach((x) => { $("view-" + x).hidden = x !== v; const t = $("tab-" + x); t.setAttribute("aria-selected", String(x === v)); t.tabIndex = x === v ? 0 : -1; });
     $("hero-jour").hidden = v !== "jour"; $("hero-seance").hidden = v !== "seance"; $("hero-hist").hidden = v !== "hist"; $("hero-corps").hidden = v !== "corps";
     $("datebar").hidden = v === "hist" || v === "corps";
-    if (v === "hist") { flushSave(); renderHist(); renderTrophies(); renderProgress(); renderCompare(); renderBilans(); }
+    if (v === "hist") { flushSave(); renderHist(); try { renderGoal(); } catch (e) { console.error(e); } renderTrophies(); renderProgress(); renderCompare(); renderBilans(); }
     if (v === "corps") { flushSave(); renderCorps(); }
     window.scrollTo(0, 0);
   }
@@ -3929,13 +4118,20 @@ sommeil: Somme</pre></li>
       TG_F.forEach((f) => { if (isNum(t[f])) r[f] = t[f]; });
       if (Object.keys(r).length) out.tg[p] = r;
     });
+    if (o.goal && typeof o.goal === "object" && PH[o.goal.p] && /^\d{4}-\d{2}-\d{2}$/.test(String(o.goal.end))) {
+      const g = o.goal, G = { p: g.p, end: String(g.end), bench: !!g.bench, abs: !!g.abs, absOk: !!g.absOk };
+      if (isNum(g.kg) && g.kg > 0 && g.kg <= 30) G.kg = g.kg;
+      G.steps = (Array.isArray(g.steps) ? g.steps : []).map(String).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)).sort().slice(0, 3);
+      if (typeof g.at === "string") G.at = g.at;
+      out.goal = G;
+    }
     if (typeof o.updatedAt === "string") out.updatedAt = o.updatedAt;
     return out;
   }
   function settingsChanged() {
     applyTargets();
     if (!dirty && !typingNow()) loadDay(cur); else { paintNutrition(); paintDeficit(); }
-    renderHist();
+    renderHist(); try { renderGoal(); } catch (e) { console.error(e); }
     if (view === "corps") renderCorps();
     if (PS) paintPhase(false);
   }
