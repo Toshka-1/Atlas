@@ -105,7 +105,7 @@
       .then(function (r) { clearTimeout(t); return r.text().then(function (x) { var j = null; try { j = x ? JSON.parse(x) : null; } catch (e) { j = null; } return { status: r.status, ok: r.ok, json: j }; }); },
         function (e) { clearTimeout(t); throw { code: "net" }; });
   };
-  var authErr = function (r) { if (r.status === 401) throw { code: "auth", msg: "Code refusé ou expiré." }; if (r.status === 403 && !/rate limit/i.test((r.json && r.json.message) || "")) throw { code: "auth", msg: "Ce code n'a pas le droit d'écrire dans Atlas-data (Contents : Read and write)." }; };
+  var authErr = function (r) { if (r.status === 401) throw { code: "auth", msg: "Code refusé ou expiré." }; if (r.status === 403 && !/rate limit/i.test((r.json && r.json.message) || "")) throw { code: "auth", msg: "Ce code peut lire mais pas écrire : sur GitHub, mets Contents en « Read and write »." }; };
   var photoUrl = function (id) { return new URL("./_blob/" + id, location.href).href; };
   var cacheOpen = function (n) { return typeof caches !== "undefined" ? caches.open(n) : Promise.reject({ code: "no_cache" }); };
   var putCfg = function () { var t = token(); return cacheOpen(CFG).then(function (c) { return t ? c.put(new URL("./__cfg", location.href).href, new Response(JSON.stringify({ t: t }), { headers: { "Content-Type": "application/json" } })) : c.delete(new URL("./__cfg", location.href).href); }).catch(function () {}); };
@@ -181,7 +181,7 @@
     });
   }
   function schedule(ms) { if (!token()) return; clearTimeout(timer); timer = setTimeout(run, ms); }
-  function touched(c) { if (SYNCED.indexOf(c) < 0) return; cloud.dirty = true; emit(); schedule(4000); }
+  function touched(c) { if (SYNCED.indexOf(c) < 0) return; cloud.dirty = true; emit(); if (cloud.state !== "auth") schedule(4000); } // code refusé : on attend un nouveau code, pas de nouvel essai à chaque saisie
   window.addEventListener("online", function () { schedule(400); });
   window.addEventListener("offline", function () { if (token()) setState("offline"); });
   document.addEventListener("visibilitychange", function () { if (document.visibilityState === "visible") schedule(800); });
@@ -880,6 +880,7 @@ details.howto .exideas { margin-top: 6px }
         <label class="f"><span class="lab">Code GitHub</span><span class="inp"><input type="text" id="cloudtok" style="-webkit-text-security:disc" placeholder="github_pat_…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" enterkeyhint="done"></span></label>
         <button class="btn" id="cloudsave" type="button">Activer la sauvegarde</button>
         <a class="linkish2" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Créer le code sur GitHub</a>
+        <button class="linkish2" id="cloudcancel" type="button" hidden>Annuler</button>
       </div>
       <p class="hint" id="cloudmsg" role="status" hidden></p>
     </div>
@@ -2463,7 +2464,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v21";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v22";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
@@ -3068,16 +3069,19 @@ sommeil: Somme</pre></li>
     const CL = window.__atlasCloud; if (!LOCAL || !CL) return;
     const st = CL.status(), at = st.at && !isNaN(Date.parse(st.at)) ? new Date(st.at) : null;
     const when = at ? (at.toDateString() === new Date().toDateString() ? "à " + hhmm(at) : "le " + fmtDM(st.at.slice(0, 10)) + " à " + hhmm(at)) : "";
-    const full = !st.configured || st.state === "auth" || cloudEdit;
+    const full = !st.configured || cloudEdit;
+    $("cloudcancel").hidden = !st.configured;
+    $("cloudnow").textContent = st.state === "auth" ? "Changer le code" : "Synchroniser";
     $("synccard-l").classList.toggle("slim", !full); $("cloudslim").hidden = full; $("cloudfull").hidden = !full;
     if (full) {
-      $("cloudstate").textContent = st.state === "auth" ? (st.err || "Code refusé.") + " Refais un code et colle-le ici : tes saisies restent sur le téléphone en attendant."
+      $("cloudstate").textContent = st.state === "auth" ? (st.err || "Code refusé.") + " Colle ici un code qui a Contents en « Read and write »."
         : st.configured ? "Colle le nouveau code pour le remplacer."
         : "Pour ne plus rien perdre, même en changeant de téléphone : tout ce que tu notes ici est recopié tout seul dans ton dépôt GitHub privé dès que tu as du réseau.";
       return;
     }
     const sl = $("cloudslim"), line = $("cloudline"), ph = st.photos ? " (" + st.photos + " " + plural(st.photos, "photo", "photos") + " en attente)" : "";
-    if (st.state === "sync") { sl.dataset.s = "busy"; line.textContent = "Synchronisation…"; }
+    if (st.state === "auth") { sl.dataset.s = "err"; line.textContent = (st.err || "Code refusé.") + " Tes saisies restent sur l'iPhone en attendant."; }
+    else if (st.state === "sync") { sl.dataset.s = "busy"; line.textContent = "Synchronisation…"; }
     else if (st.state === "offline") { sl.dataset.s = "busy"; line.textContent = "Pas de réseau : tout reste sur l'iPhone et partira tout seul" + ph + "."; }
     else if (st.state === "error") { sl.dataset.s = "err"; line.textContent = "Pas encore envoyé, nouvel essai automatique. " + (when ? "Dernière sauvegarde " + when + "." : ""); }
     else if (st.pending) { sl.dataset.s = "busy"; line.textContent = "Modifs à envoyer" + ph + (when ? " · dernière sauvegarde " + when : "") + "."; }
@@ -3092,7 +3096,8 @@ sommeil: Somme</pre></li>
       flushSave(); window.__atlasCloud.setToken(v); $("cloudtok").value = ""; cloudEdit = false; cmsg(""); paintCloud();
     };
     $("cloudtok").addEventListener("keydown", (e) => { if (e.key === "Enter") $("cloudsave").click(); });
-    $("cloudnow").onclick = () => { flushSave(); window.__atlasCloud.syncNow(); };
+    $("cloudnow").onclick = () => { if (window.__atlasCloud.status().state === "auth") { cloudEdit = true; paintCloud(); $("cloudtok").focus(); return; } flushSave(); window.__atlasCloud.syncNow(); };
+    $("cloudcancel").onclick = () => { cloudEdit = false; cmsg(""); paintCloud(); };
     $("cloudline").addEventListener("dblclick", () => { cloudEdit = true; paintCloud(); });
     paintCloud();
   }
