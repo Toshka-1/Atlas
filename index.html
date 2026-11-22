@@ -306,6 +306,19 @@
 .gnext { margin-top: 8px; font-size: 13.5px; color: var(--muted) }
 .gtogs { display: grid; gap: 8px; margin: 10px 0 }
 #goalcard .linkish2 { margin-top: 6px }
+.setged > .mchips, .setged > .swbtns, .setged > .pick { grid-column: 1 / -1 }
+.mchips { display: grid; gap: 6px; margin-bottom: 8px }
+.mchips .chips { display: flex; flex-wrap: wrap; gap: 6px }
+.mchip { display: grid; gap: 1px; height: auto !important; min-height: 44px; padding: 6px 12px !important; border-radius: 12px !important; text-align: left; white-space: normal }
+.mchip b { font-size: 13.5px } .mchip span { font-size: 11.5px; font-weight: 500; color: var(--muted) }
+.mchip[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft) }
+.mchip[aria-pressed="true"] span { color: inherit; opacity: .85 }
+.swbtns { display: grid; justify-items: start; gap: 2px; margin-top: 6px }
+.pick { display: grid; gap: 8px; margin-top: 8px; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface) }
+.pick input[type="search"] { width: 100%; height: 44px; padding: 0 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); font: 500 16px var(--body); -webkit-appearance: none; appearance: none }
+.picklist { display: grid; gap: 6px }
+.pickrow { display: grid; gap: 2px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); text-align: left; cursor: pointer; font: inherit }
+.pickrow b { font-size: 14px } .pickrow span { font-size: 12px; color: var(--muted); overflow-wrap: anywhere }
 .trophy .nomedal { font-size: 20px; opacity: .55 }
 .trophy .lvl { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--sunk); color: var(--muted) }
 .trophy .lvl.l3, .trophy .lvl.l4 { background: #F6E7B0; color: #6B4E00 }
@@ -1947,6 +1960,119 @@ sommeil: Somme</pre></li>
     return "";
   }
 
+  // ---------- exercices liés et remplacements (demandé le 21 nov) ----------
+  // Machine changée en cours de séance : les machines déjà utilisées pour cet exercice, avec leur dernière fois, en un geste.
+  // Exercice remplacé : la liste de ceux déjà faits (toutes séances), les plus proches en muscles d'abord.
+  // « C'est le même » : un nom est rattaché à un autre (historique renommé), en gardant au besoin ses charges à part (comme une machine).
+  let pickOpen = null;
+  function lastAny(name, machine) { // dernière séance de cet exercice sur cette machine ("*" = toutes), toutes séances confondues
+    const nn = norm(name);
+    for (const k of pastDays(cur)) { const w = days[k].workout; if (!Array.isArray(w)) continue; const e = w.find((x) => norm(x.name) === nn && (machine === "*" || norm(x.machine) === norm(machine)) && (x.sets || []).some(work)); if (e) return { k, ex: e }; }
+    return null;
+  }
+  function machineChips(ex, i) {
+    const box = el("div", "mchips"), ms = machinesFor(ex.name), opts = [""].concat(ms);
+    if (!ms.length) return box;
+    box.appendChild(el("span", "lab", "Déjà utilisées"));
+    const row = el("div", "chips");
+    opts.forEach((m) => {
+      const l = lastAny(ex.name, m), b = el("button", "chip mchip"); b.type = "button";
+      b.setAttribute("aria-pressed", String(norm(m) === norm(ex.machine)));
+      b.append(el("b", null, m || "Habituelle"), el("span", null, l ? fmtShort(l.k) + " · " + setsText(l.ex) : "pas de série"));
+      b.onclick = () => { if (m) ex.machine = m; else delete ex.machine; delete ex.note; if (!swapped(ex)) delete ex.keep; queueSave(); renderExercises("#cfg-" + i); };
+      row.appendChild(b);
+    });
+    box.appendChild(row); return box;
+  }
+  function knownExercises(exclude) {
+    const map = new Map();
+    sortedKeys().forEach((k) => (Array.isArray(days[k].workout) ? days[k].workout : []).forEach((e) => {
+      const nn = norm(e.name); if (!nn || nn === norm(exclude) || !(e.sets || []).some(work)) return;
+      const r = map.get(nn) || { name: e.name, n: 0 }; r.name = e.name; r.k = k; r.ex = e; r.s = days[k].session || ""; r.n++; map.set(nn, r);
+    }));
+    Object.values(TPL).forEach((l) => l.forEach(([nm]) => { const nn = norm(nm); if (nn && nn !== norm(exclude) && !map.has(nn)) map.set(nn, { name: nm, n: 0 }); }));
+    return [...map.values()];
+  }
+  function exScore(a, b) { // proximité : muscles en commun, puis mots en commun
+    const ma = musclesOf(a), mb = musclesOf(b); let sc = 0;
+    Object.keys(ma).forEach((m) => { if (mb[m]) sc += Math.min(ma[m], mb[m]) * 10; });
+    const wa = norm(a).split(" ").filter((x) => x.length > 3), wb = new Set(norm(b).split(" "));
+    wa.forEach((x) => { if (wb.has(x)) sc += 6; });
+    return sc;
+  }
+  function exPicker(ex, i) {
+    const P = pickOpen, box = el("div", "pick"), link = P.mode === "link";
+    box.appendChild(el("p", "hint", link ? "Choisis le nom sous lequel « " + (ex.name || "cet exercice") + " » est déjà noté : son historique sera regroupé." : "Choisis l'exercice qui remplace « " + (ex.name || "celui-ci") + " ». Sa dernière fois sert de repère, même s'il vient d'une autre séance."));
+    const q = el("input"); q.type = "search"; q.id = "pickq-" + i; q.placeholder = "Chercher un exercice"; q.autocomplete = "off"; q.value = P.q || ""; q.setAttribute("enterkeyhint", "search");
+    const list = el("div", "picklist");
+    const paint = () => {
+      list.innerHTML = "";
+      const qq = norm(q.value), all = knownExercises(ex.name).filter((r) => !qq || norm(r.name).includes(qq));
+      all.forEach((r) => { r.sc = exScore(ex.name || "", r.name); });
+      all.sort((a, b) => b.sc - a.sc || String(b.k || "").localeCompare(String(a.k || "")) || a.name.localeCompare(b.name, "fr"));
+      all.slice(0, 10).forEach((r) => {
+        const b = el("button", "pickrow"); b.type = "button";
+        b.append(el("b", null, r.name), el("span", null, r.ex ? (r.s ? r.s + " · " : "") + fmtShort(r.k) + " : " + setsText(r.ex) : "Pas encore noté"));
+        b.onclick = () => (link ? askLink(ex, i, r.name, list) : replaceWith(ex, i, r.name));
+        list.appendChild(b);
+      });
+      if (!all.length) list.appendChild(el("p", "empty", "Aucun exercice trouvé."));
+    };
+    q.addEventListener("input", () => { P.q = q.value; paint(); });
+    paint();
+    const close = el("button", "linkish2", "Fermer"); close.type = "button"; close.onclick = () => { pickOpen = null; renderExercises("#cfg-" + i); };
+    box.append(q, list, close);
+    return box;
+  }
+  function replaceWith(ex, i, nm) {
+    if (!ex.from) ex.from = { name: ex.name, machine: ex.machine };
+    const l = lastAny(nm, "*");
+    ex.name = nm; if (l && l.ex.machine) ex.machine = l.ex.machine; else delete ex.machine; delete ex.note; delete ex.keep;
+    ex.unit = l ? l.ex.unit || "kg" : unitFor(nm, cur);
+    pickOpen = null; queueSave(); renderExercises("#w-" + i + "-0");
+    toast(nm + (ex.machine ? " (" + ex.machine + ")" : "") + " : repère repris de ta dernière fois.");
+  }
+  function variantOf(from, to) { // « Leg extension unilatéral » rattaché à « Leg extension » : variante « Unilatéral »
+    const wt = new Set(norm(to).split(" ")), rest = from.trim().split(/\s+/).filter((w) => !wt.has(norm(w)));
+    const v = (rest.length ? rest.join(" ") : from.trim()); return v.charAt(0).toUpperCase() + v.slice(1);
+  }
+  function askLink(ex, i, target, list) {
+    const from = ex.name || "", v = variantOf(from, target);
+    list.innerHTML = "";
+    const q = el("div", "swapq");
+    q.appendChild(el("p", null, "Regrouper « " + from + " » avec « " + target + " ». Les charges sont-elles comparables ?"));
+    const acts = el("div", "acts"), y = el("button", "btn", "Oui, mêmes charges"), n = el("button", "btn ghost", "Non, à part (« " + v + " »)"), c = el("button", "linkish2", "Annuler");
+    [y, n, c].forEach((b) => { b.type = "button"; });
+    y.onclick = () => linkNames(from, target, ""); n.onclick = () => linkNames(from, target, v); c.onclick = () => { pickOpen = null; renderExercises("#cfg-" + i); };
+    acts.append(y, n); q.append(acts, c); list.appendChild(q);
+  }
+  function aliasEx(e) { // nom déjà rattaché à un autre : on écrit directement le bon nom (et la variante comme machine)
+    const A = (SET.alias || {})[norm(e.name)]; if (!A) return false;
+    e.name = A.to; if (A.m && !e.machine) e.machine = A.m; return true;
+  }
+  function renameIn(list, from, to, m) {
+    let n = 0; (list || []).forEach((e) => {
+      if (norm(e.name) === norm(from)) { e.name = to; if (m) e.machine = e.machine ? m + " · " + e.machine : m; n++; }
+      if (e.from && norm(e.from.name) === norm(from)) { e.from.name = to; if (m && !e.from.machine) e.from.machine = m; }
+    });
+    return n;
+  }
+  function linkNames(from, to, m) {
+    flushSave();
+    let nd = 0;
+    sortedKeys().forEach((k) => {
+      if (k === cur) return;
+      const d = days[k]; if (!Array.isArray(d.workout) || !d.workout.some((e) => norm(e.name) === norm(from) || (e.from && norm(e.from.name) === norm(from)))) return;
+      const doc = clone(d); if (renameIn(doc.workout, from, to, m)) nd++; stage(k, doc, ["workout"]);
+    });
+    if (renameIn(state.workout, from, to, m)) { nd++; queueSave(); flushSave(); } // la séance du jour d'abord : le rechargement qui suit la relit
+    const next = clone(SET); next.alias = Object.assign({}, next.alias); next.alias[norm(from)] = { to, m: m || "" };
+    Object.keys(next.alias).forEach((k) => { if (norm(next.alias[k].to) === norm(from)) next.alias[k] = { to, m: next.alias[k].m || m || "" }; }); // chaînes : A→B puis B→C
+    next.updatedAt = new Date().toISOString(); applySettings(next);
+    pickOpen = null; queueSave(); pump(); renderExercises(); renderHist();
+    toast("« " + from + " » regroupé avec « " + to + " »" + (m ? " (variante " + m + ")" : "") + " : " + nd + " " + plural(nd, "séance", "séances") + ".");
+  }
+
   function machinesFor(name) { // machines déjà notées pour cet exercice
     const nn = norm(name), out = new Set();
     Object.values(days).forEach((d) => (Array.isArray(d.workout) ? d.workout : []).forEach((e) => { if (norm(e.name) === nn && e.machine) out.add(e.machine); }));
@@ -2017,7 +2143,8 @@ sommeil: Somme</pre></li>
     const head = el("div", "exhead");
     const name = el("input", "exname"); name.type = "text"; name.id = "exname-" + i; name.value = ex.name || ""; name.autocomplete = "off"; name.setAttribute("aria-label", "Nom de l'exercice");
     name.addEventListener("input", () => { ex.name = name.value.trim(); queueSave(); });
-    name.addEventListener("change", () => { ex.name = name.value.trim(); if (!swapped(ex)) delete ex.keep; queueSave(); renderExercises(); });
+    name.setAttribute("list", "exnames");
+    name.addEventListener("change", () => { ex.name = name.value.trim(); aliasEx(ex); if (!swapped(ex)) delete ex.keep; queueSave(); renderExercises(); });
     const cfg = iconBtn("sliders", "Réglage machine : " + (ex.name || "exercice")); cfg.classList.add("cfg"); cfg.id = "cfg-" + i;
     const nextU = UNITS[(UNITS.indexOf(unitTxt) + 1) % UNITS.length];
     const unit = el("button", "unit", uName); unit.type = "button"; unit.id = "unit-" + i; unit.title = "Unité : lb, plaques ou kg"; unit.setAttribute("aria-label", "Unité : " + uName + ". Toucher pour passer en " + unitName(nextU));
@@ -2038,8 +2165,14 @@ sommeil: Somme</pre></li>
     const nlab = el("label", "f"), nin = el("input"); nin.type = "text"; nin.id = "note-" + i; nin.placeholder = "Siège 4, cran 3, prise neutre…"; nin.autocomplete = "off"; nin.setAttribute("enterkeyhint", "done");
     nlab.append(el("span", "lab", "Réglage"), nin);
     const nok = el("button", "btn ghost", "OK"); nok.type = "button";
-    ned.append(mlab, nlab, nok, mdl);
+    const mch = machineChips(ex, i);
+    ned.append(mch, mlab, nlab, nok, mdl);
     ned.appendChild(el("p", "hint", "Autre machine pour le même exercice : ses charges sont comparées à part, la tendance n'est pas cassée."));
+    const swb = el("div", "swbtns"), b1 = el("button", "linkish2", "⇄ Remplacer par un exercice déjà fait"), b2 = el("button", "linkish2", "🔗 C'est le même exercice qu'un autre nom");
+    b1.type = "button"; b2.type = "button"; b1.id = "swr-" + i; b2.id = "swl-" + i;
+    b1.onclick = () => { pickOpen = pickOpen && pickOpen.i === i && pickOpen.mode === "rep" ? null : { i, mode: "rep", q: "" }; renderExercises("#pickq-" + i); };
+    b2.onclick = () => { pickOpen = pickOpen && pickOpen.i === i && pickOpen.mode === "link" ? null : { i, mode: "link", q: "" }; renderExercises("#pickq-" + i); };
+    swb.append(b1, b2); ned.appendChild(swb);
     const openEd = () => { min.value = ex.machine || ""; nin.value = ex.note !== undefined ? ex.note : note; nl.hidden = true; ned.hidden = false; (ex.machine || note ? nin : min).focus(); };
     min.addEventListener("input", () => { const v = min.value.trim(); if (v) ex.machine = v; else delete ex.machine; queueSave(); });
     min.addEventListener("change", () => { if (!swapped(ex)) delete ex.keep; delete ex.note; queueSave(); });
@@ -2049,6 +2182,7 @@ sommeil: Somme</pre></li>
     cfg.onclick = () => (ned.hidden ? openEd() : renderExercises());
     nl.onclick = openEd;
     card.append(nl, ned);
+    if (pickOpen && pickOpen.i === i) { min.value = ex.machine || ""; nin.value = ex.note !== undefined ? ex.note : note; nl.hidden = true; ned.hidden = false; ned.appendChild(exPicker(ex, i)); }
     // Exercice ou machine changés par rapport au modèle : pour cette fois seulement, ou à garder pour la suite ?
     if (swapped(ex) && state.session) {
       const was = [ex.from.name !== undefined && norm(ex.from.name) !== norm(ex.name) ? ex.from.name : "", norm(ex.from.machine) !== norm(ex.machine) ? (ex.from.machine ? "machine « " + ex.from.machine + " »" : "machine habituelle") : ""].filter(Boolean).join(", ");
@@ -2189,7 +2323,7 @@ sommeil: Somme</pre></li>
   function addExercise() {
     const name = $("newex").value.trim(); if (!name) { $("newex").focus(); return; }
     state.workout = state.workout || [];
-    state.workout.push({ name, unit: unitFor(name, cur), sets: blank(1) });
+    const nx = { name, sets: blank(1) }; aliasEx(nx); nx.unit = unitFor(nx.name, cur); state.workout.push(nx);
     if (!state.workoutFor) state.workoutFor = state.session;
     $("newex").value = ""; queueSave(); renderExercises("#w-" + (state.workout.length - 1) + "-0");
   }
@@ -2526,7 +2660,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v23";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v24";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
@@ -4124,6 +4258,10 @@ sommeil: Somme</pre></li>
       G.steps = (Array.isArray(g.steps) ? g.steps : []).map(String).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)).sort().slice(0, 3);
       if (typeof g.at === "string") G.at = g.at;
       out.goal = G;
+    }
+    if (o.alias && typeof o.alias === "object") {
+      const A = {}; Object.keys(o.alias).slice(0, 200).forEach((k) => { const v = o.alias[k]; if (v && typeof v.to === "string" && v.to.trim() && norm(k) && norm(k) !== norm(v.to)) A[norm(k)] = { to: v.to.trim(), m: typeof v.m === "string" ? v.m : "" }; });
+      if (Object.keys(A).length) out.alias = A;
     }
     if (typeof o.updatedAt === "string") out.updatedAt = o.updatedAt;
     return out;
