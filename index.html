@@ -319,6 +319,17 @@
 .picklist { display: grid; gap: 6px }
 .pickrow { display: grid; gap: 2px; padding: 9px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--sunk); color: var(--ink); text-align: left; cursor: pointer; font: inherit }
 .pickrow b { font-size: 14px } .pickrow span { font-size: 12px; color: var(--muted); overflow-wrap: anywhere }
+#reorder { justify-self: center; margin-bottom: 4px }
+.ordcard { gap: 10px }
+.ordtop { display: flex; align-items: center; justify-content: space-between; gap: 10px }
+.ordtop h3 { margin: 0 }
+.ordlist { display: grid; gap: 6px; touch-action: none }
+.ordrow { display: grid; grid-template-columns: 36px minmax(0, 1fr) 44px 44px; align-items: center; gap: 6px; min-height: 52px; padding: 4px 6px 4px 0; border-radius: 12px; border: 1px solid var(--line); background: var(--sunk); transition: transform .12s }
+.ordrow.drag { transition: none; position: relative; z-index: 2; box-shadow: var(--shadow); background: var(--surface); border-color: var(--accent) }
+.grip { display: grid; place-items: center; height: 44px; font-size: 20px; color: var(--muted); cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none }
+.ordname { display: grid; min-width: 0 } .ordname b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap } .ordname span { font-size: 12px; color: var(--muted) }
+.ordbtn { height: 44px; border-radius: 10px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); font: 600 18px var(--body); cursor: pointer }
+.ordbtn:disabled { opacity: .3; cursor: default }
 .trophy .nomedal { font-size: 20px; opacity: .55 }
 .trophy .lvl { display: inline-block; margin-top: 4px; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--sunk); color: var(--muted) }
 .trophy .lvl.l3, .trophy .lvl.l4 { background: #F6E7B0; color: #6B4E00 }
@@ -881,6 +892,7 @@ details.howto .exideas { margin-top: 6px }
     <div id="exlist"></div>
     <section class="card addcard">
       <button class="linkbtn" id="replace" type="button" hidden></button>
+      <button class="linkish2" id="reorder" type="button" hidden>↕ Changer l'ordre des exercices</button>
       <div class="addex">
         <input type="text" id="newex" list="exnames" placeholder="Ajouter un exercice" aria-label="Nom de l'exercice à ajouter" autocomplete="off">
         <button class="btn" id="addex" type="button">Ajouter</button>
@@ -1964,7 +1976,7 @@ sommeil: Somme</pre></li>
   // Machine changée en cours de séance : les machines déjà utilisées pour cet exercice, avec leur dernière fois, en un geste.
   // Exercice remplacé : la liste de ceux déjà faits (toutes séances), les plus proches en muscles d'abord.
   // « C'est le même » : un nom est rattaché à un autre (historique renommé), en gardant au besoin ses charges à part (comme une machine).
-  let pickOpen = null;
+  let pickOpen = null, ordering = false;
   function lastAny(name, machine) { // dernière séance de cet exercice sur cette machine ("*" = toutes), toutes séances confondues
     const nn = norm(name);
     for (const k of pastDays(cur)) { const w = days[k].workout; if (!Array.isArray(w)) continue; const e = w.find((x) => norm(x.name) === nn && (machine === "*" || norm(x.machine) === norm(machine)) && (x.sets || []).some(work)); if (e) return { k, ex: e }; }
@@ -2127,9 +2139,52 @@ sommeil: Somme</pre></li>
     if (s === "Course") renderRun();
     if (strength) renderExercises(); else paintSeanceHero();
   }
+  function moveEx(from, to) {
+    const w = state.workout || []; if (to < 0 || to >= w.length || from === to) return;
+    w.splice(to, 0, w.splice(from, 1)[0]); pickOpen = null; queueSave();
+  }
+  function renderOrder(list, focusSel) {
+    const w = state.workout || [], card = el("div", "card ordcard");
+    const top = el("div", "ordtop"); top.append(el("h3", null, "Ordre des exercices"));
+    const done = el("button", "btn", "Terminé"); done.type = "button"; done.id = "orddone"; done.onclick = () => { ordering = false; renderExercises(); };
+    top.appendChild(done); card.appendChild(top);
+    card.appendChild(el("p", "hint", "Glisse la poignée ou utilise les flèches. La prochaine " + (state.session || "séance") + " reprendra cet ordre."));
+    const ul = el("div", "ordlist");
+    w.forEach((ex, i) => {
+      const row = el("div", "ordrow"); row.dataset.i = i;
+      const h = el("span", "grip", "⠿"); h.setAttribute("aria-hidden", "true");
+      const nm = el("span", "ordname"); nm.append(el("b", null, (i + 1) + ". " + (ex.name || "Exercice")));
+      const nset = (ex.sets || []).filter(filled).length; if (nset) nm.append(el("span", null, nset + " " + plural(nset, "série notée", "séries notées")));
+      const up = el("button", "ordbtn", "↑"), dn = el("button", "ordbtn", "↓");
+      up.type = dn.type = "button"; up.id = "up-" + i; dn.id = "dn-" + i;
+      up.setAttribute("aria-label", "Monter " + (ex.name || "l'exercice")); dn.setAttribute("aria-label", "Descendre " + (ex.name || "l'exercice"));
+      up.disabled = i === 0; dn.disabled = i === w.length - 1;
+      up.onclick = () => { moveEx(i, i - 1); renderExercises("#up-" + Math.max(0, i - 1)); };
+      dn.onclick = () => { moveEx(i, i + 1); renderExercises("#dn-" + Math.min(w.length - 1, i + 1)); };
+      row.append(h, nm, up, dn); ul.appendChild(row);
+      // glisser (doigt ou souris) depuis la poignée
+      h.addEventListener("pointerdown", (e) => {
+        e.preventDefault(); const rows = [...ul.children], y0 = e.clientY, hgt = row.getBoundingClientRect().height + 6;
+        let to = i; row.classList.add("drag"); try { h.setPointerCapture(e.pointerId); } catch (x) {}
+        const mv = (ev) => {
+          const dy = ev.clientY - y0; to = Math.max(0, Math.min(rows.length - 1, i + Math.round(dy / hgt)));
+          row.style.transform = "translateY(" + dy + "px)";
+          rows.forEach((r, j) => { if (r === row) return; const sh = i < j && j <= to ? -hgt : to <= j && j < i ? hgt : 0; r.style.transform = sh ? "translateY(" + sh + "px)" : ""; });
+        };
+        const up2 = () => { h.removeEventListener("pointermove", mv); h.removeEventListener("pointerup", up2); h.removeEventListener("pointercancel", up2); moveEx(i, to); renderExercises(); };
+        h.addEventListener("pointermove", mv); h.addEventListener("pointerup", up2); h.addEventListener("pointercancel", up2);
+      });
+    });
+    card.appendChild(ul); list.appendChild(card);
+    $("reorder").hidden = true; $("replace").hidden = true;
+    fillDatalist(); paintSeanceHero();
+    if (focusSel) { const t = list.querySelector(focusSel); if (t && !t.disabled) t.focus(); }
+  }
   function renderExercises(focusSel) {
     const list = $("exlist"); list.innerHTML = "";
     const w = state.workout || [];
+    if (ordering && w.length > 1) return renderOrder(list, focusSel);
+    ordering = false; $("reorder").hidden = w.length < 2;
     if (!w.length) { const c = el("div", "card"); c.appendChild(el("p", "empty", "Aucun exercice pour l'instant. Ajoute le premier ci-dessous.")); list.appendChild(c); }
     w.forEach((ex, i) => list.appendChild(exCard(ex, i)));
     $("replace").hidden = !(hasFilled(w) && state.workoutFor && state.workoutFor !== state.session);
@@ -2328,6 +2383,7 @@ sommeil: Somme</pre></li>
     $("newex").value = ""; queueSave(); renderExercises("#w-" + (state.workout.length - 1) + "-0");
   }
   $("addex").onclick = addExercise;
+  $("reorder").onclick = () => { ordering = true; pickOpen = null; renderExercises("#orddone"); const c = $("exlist"); if (c.scrollIntoView) c.scrollIntoView({ block: "start", behavior: "smooth" }); };
   $("newex").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addExercise(); } });
   $("replace").onclick = () => {
     const old = clone(state.workout || []), oldFor = state.workoutFor;
@@ -2660,7 +2716,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v24";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v25";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
