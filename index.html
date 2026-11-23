@@ -97,8 +97,8 @@
   var b64text = function (t) { var u = new TextEncoder().encode(t), s = "", i; for (i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
   var b64buf = function (buf) { var u = new Uint8Array(buf), s = "", i; for (i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
   var unb64 = function (b) { var s = atob(String(b).replace(/\s/g, "")), u = new Uint8Array(s.length), i; for (i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return new TextDecoder().decode(u); };
-  var api = function (method, path, body) {
-    var ctl = typeof AbortController === "function" ? new AbortController() : null, t = ctl ? setTimeout(function () { ctl.abort(); }, 45000) : null;
+  var api = function (method, path, body, ms) {
+    var ctl = typeof AbortController === "function" ? new AbortController() : null, t = ctl ? setTimeout(function () { ctl.abort(); }, ms || 45000) : null;
     return fetch(GH + path, { method: method, cache: "no-store", signal: ctl ? ctl.signal : undefined,
       headers: Object.assign({ Authorization: "Bearer " + token(), Accept: "application/vnd.github+json" }, body ? { "Content-Type": "application/json" } : {}),
       body: body ? JSON.stringify(body) : undefined })
@@ -131,20 +131,6 @@
         if (Object.keys(changedC).length) { save(); Object.keys(changedC).forEach(deliver); }
       });
     }).then(function () {
-      // 2) photos prises sur ce téléphone, pas encore en ligne
-      return s.photos.slice().reduce(function (pr, id) {
-        return pr.then(function () {
-          var p = "photos/" + id + ".jpg", done = function () { s.photos = s.photos.filter(function (x) { return x !== id; }); sst(s); };
-          if (remote[p]) { done(); return; }
-          return cacheOpen(PH).then(function (c) { return c.match(photoUrl(id)); }).then(function (m) {
-            if (!m) { done(); return; }
-            return m.arrayBuffer().then(function (buf) { return api("PUT", "/contents/" + p, { message: "Atlas : photo " + id, content: b64buf(buf) }); }).then(function (r) {
-              authErr(r); if (r.ok || r.status === 422) { done(); emit(); return; } throw { code: "http", msg: "Envoi de photo refusé (" + r.status + ")." };
-            });
-          });
-        });
-      }, Promise.resolve());
-    }).then(function () {
       // 3) envoyer ce qui a changé ici
       var files = buildFiles(), paths = Object.keys(files).filter(function (p) { return hash(files[p]) !== s.hash[p]; });
       return paths.reduce(function (pr, p) {
@@ -161,6 +147,20 @@
     }).then(function () {
       if (retry && round < 2) return syncOnce(round + 1);
       if (retry) throw { code: "http", msg: "Conflit avec le dépôt, nouvel essai bientôt." };
+      // 4) photos ensuite : une photo lente ou refusée ne bloque plus l'envoi des séances
+      var photoErr = null;
+      return s.photos.slice().reduce(function (pr, id) {
+        return pr.then(function () {
+          var p = "photos/" + id + ".jpg", done = function () { s.photos = s.photos.filter(function (x) { return x !== id; }); sst(s); };
+          if (remote[p]) { done(); return; }
+          return cacheOpen(PH).then(function (c) { return c.match(photoUrl(id)); }).then(function (m) {
+            if (!m) { done(); return; }
+            return m.arrayBuffer().then(function (buf) { return api("PUT", "/contents/" + p, { message: "Atlas : photo " + id, content: b64buf(buf) }, 180000); }).then(function (r) {
+              authErr(r); if (r.ok || r.status === 422) { done(); emit(); return; } throw { code: "http", msg: "Envoi de photo refusé (" + r.status + ")." };
+            });
+          }).catch(function (e) { if (e && e.code === "auth") throw e; photoErr = photoErr || (e && e.code === "net" ? { code: "net" } : { code: "http", msg: (e && e.msg) || "Envoi de photo impossible pour l'instant." }); });
+        });
+      }, Promise.resolve()).then(function () { if (photoErr) throw photoErr; });
     });
   }
   function run() {

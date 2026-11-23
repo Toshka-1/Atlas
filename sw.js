@@ -1,5 +1,5 @@
 // Atlas hors ligne : garde l'appli sur l'iPhone pour qu'elle s'ouvre sans réseau.
-const C = "atlas-v25", PH = "atlas-photos", CFG = "atlas-cfg";
+const C = "atlas-v26", PH = "atlas-photos", CFG = "atlas-cfg";
 const CORE = ["./", "./index.html", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(C).then((c) => c.addAll(CORE)).then(() => self.skipWaiting())); });
 // seules les anciennes versions de l'appli sont effacées : les photos et le réglage restent
