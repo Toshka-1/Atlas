@@ -272,6 +272,8 @@
 .trophy em { display: block; font-style: normal; color: var(--muted); font-size: 13px }
 .trophy .when { font-size: 12px; color: var(--muted); text-align: right; white-space: nowrap }
 .budnum { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px }
+.marge { display: grid; gap: 4px; margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: var(--sunk); border: 1px solid var(--line) }
+.marge p { margin: 0 } .margehead { font-size: 14px; color: var(--muted) } .margehead b { color: var(--ink) } .margetxt { font-size: 14px; color: var(--ink) }
 .budnum strong { font: 800 40px/1 var(--display) }
 .budnum span { font-size: 14px; color: var(--muted) }
 .budnum.warn strong { color: var(--warn) } .budnum.bad strong { color: var(--bad) }
@@ -1632,7 +1634,28 @@ sommeil: Somme</pre></li>
     rows.forEach((r) => { if (r.missed) eaten += r.tg.kcal; });
     const open = rows.filter((r) => r.open), free = open.filter((r) => r.plan == null), planned = open.reduce((a, r) => a + (r.plan || 0), 0);
     const left = budget - eaten, per = free.length ? (left - planned) / free.length : null;
-    return { rows, budget, eaten, left, per, open, free, planned, defT, defDone, nDef, nNoted, mon };
+    // jours finis avec dépense montre : avance (ou retard) sur le déficit visé, qui peut servir à un gros repas
+    const done = rows.filter((r) => r.df && r.k < t0), adv = done.reduce((a, r) => a + r.df.v - (r.tg.defLo + r.tg.defHi) / 2, 0);
+    return { rows, budget, eaten, left, per, open, free, planned, defT, defDone, nDef, nNoted, mon, t0, adv: done.length ? Math.round(adv) : null, nAdv: done.length };
+  }
+  function marginBox(w) {
+    const box = el("div", "marge"); if (w.adv == null) return null;
+    const r50 = (x) => Math.round(x / 50) * 50, adv = w.adv, inWeek = w.t0 >= w.mon && w.t0 <= shift(w.mon, 6);
+    const tday = w.rows.find((r) => r.k === w.t0), tg = tday ? tday.tg : tgFor(phaseAt(w.t0));
+    const head = el("p", "margehead"), nd = w.nAdv;
+    if (adv >= 150) head.append(el("b", null, "+" + fmtN(r50(adv)) + " kcal d'avance"), document.createTextNode(" sur le déficit visé, selon ta montre (" + nd + " " + plural(nd, "jour fini", "jours finis") + ")"));
+    else if (adv <= -150) head.append(el("b", null, fmtN(r50(-adv)) + " kcal de retard"), document.createTextNode(" sur le déficit visé, selon ta montre (" + nd + " " + plural(nd, "jour fini", "jours finis") + ")"));
+    else head.append(el("b", null, "Dans le rythme"), document.createTextNode(" : selon ta montre, ton déficit colle à l'objectif (" + nd + " " + plural(nd, "jour fini", "jours finis") + ")"));
+    box.appendChild(head);
+    if (!inWeek) return box;
+    const max = r50(tg.kcal + Math.max(0, adv)), kc = tday ? tday.kc : null, plan = w.rows.find((r) => r.open && r.plan != null);
+    let txt;
+    if (adv < 150) txt = "Pas de marge pour un gros repas pour l'instant : reste vers " + fmtN(tg.kcal) + " kcal par jour, ou bouge un peu plus avant de te faire plaisir.";
+    else if (kc != null) txt = kc <= max ? "Aujourd'hui " + fmtN(kc) + " kcal : dans la marge, il reste " + fmtN(r50(max - kc)) + " kcal possibles sans sortir du rythme de la sèche." : "Aujourd'hui " + fmtN(kc) + " kcal : " + fmtN(r50(kc - max)) + " au-delà de la marge. Rien de grave : rattrape-le sur les jours suivants plutôt qu'en sautant un repas.";
+    else txt = "Un gros repas peut monter jusqu'à ~" + fmtN(max) + " kcal sur la journée (" + fmtN(tg.kcal) + " + " + fmtN(r50(adv)) + ") sans sortir du rythme de la sèche.";
+    if (plan && adv >= 150) txt += " Gros repas prévu " + WDL[plan.i].toLowerCase() + " : " + fmtN(plan.plan) + " kcal, " + (plan.plan <= max ? "ça passe." : fmtN(r50(plan.plan - max)) + " de trop.");
+    box.appendChild(el("p", "margetxt", txt));
+    return box;
   }
   function paintBudget() {
     const w = weekData(), box = $("budget"), tgNow = tgFor(phaseAt(cur));
@@ -1656,6 +1679,7 @@ sommeil: Somme</pre></li>
     sub.textContent = "Mangé " + fmtN(Math.round(w.eaten - w.rows.filter((r) => r.missed).reduce((a, r) => a + r.tg.kcal, 0))) + " sur " + fmtN(w.budget) + " kcal" +
       (w.nDef ? " · déficit montre " + fmtN(Math.round(w.defDone)) + " sur " + fmtN(Math.round(w.defT)) + " visés" + (Math.abs(pace) >= 300 ? " (" + (pace > 0 ? "en avance de " : "en retard de ") + fmtN(Math.abs(pace)) + ")" : ", dans le rythme") : "");
     box.append(top, sub);
+    const mb = marginBox(w); if (mb) box.appendChild(mb);
     const missed = w.rows.filter((r) => r.missed).length;
     if (missed) hint = (hint ? hint + " " : "") + plural(missed, "Un jour passé n'est pas noté : compté à la cible.", missed + " jours passés ne sont pas notés : comptés à la cible.");
     $("budhint").textContent = hint; $("budhint").hidden = !hint;
@@ -1686,6 +1710,7 @@ sommeil: Somme</pre></li>
     });
     const sel = w.open.find((r) => r.k === planSel);
     $("plansave").hidden = false; $("plansave").textContent = sel && sel.plan != null ? "Modifier" : "Prévoir";
+    if (w.adv != null && w.adv >= 150 && sel) $("plank").placeholder = "jusqu'à ~" + fmtN(Math.round((sel.tg.kcal + w.adv) / 50) * 50) + " kcal";
     $("planclear").hidden = !(sel && sel.plan != null);
   }
   function setPlan(k, v) {
@@ -2716,7 +2741,7 @@ sommeil: Somme</pre></li>
   // hors ligne n'écrase jamais une saisie plus récente du même champ faite ailleurs.
   const OUTBOX_KEY = "carnet-outbox", CACHE_KEY = "carnet-cache", MARK_KEY = "carnet-mark", HIDE_KEY = "carnet-hide", META = ["date", "updatedAt", "ft"];
   const FATAL = ["invalid_argument", "quota_exceeded", "revoked", "not_granted", "capability_disabled", "capability_removed", "transform_error"];
-  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v25";
+  const SEND_WAIT = (typeof window.__sendWait === "number" && window.__sendWait) || 20000, APP_V = "v26";
   let outbox = {}, srv = {}, sending = {}, serverSeen = false, bootSlow = false, failures = 0, blocked = null, lastOk = null, cacheAt = null, pumpT = null, cacheT = null;
   let late = {}, gone = {}, lsOK = true, fragile = false, staged = false, bootInfo = null, diagSent = false;
   const sstore = { get(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }, set(k, v) { try { sessionStorage.setItem(k, v); return true; } catch (e) { return false; } } };
